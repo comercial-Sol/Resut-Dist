@@ -78,9 +78,13 @@ export default function AdminDashboard({
         return fCnpj === dist.cnpj_raiz
       })
 
-      // Faturamento Ano baseado no Valor Total e Data de Emissão da Nota Fiscal
+  // Faturamento Ano (considera o filtro selecionado ou soma tudo se for 'TODOS')
       const fatAno = pags
-        .filter((p) => p.data_faturamento?.startsWith(anoRef) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .filter((p) => {
+          const temValidacaoPagto = (p.numero_nf || p.status_pagamento === 'Pago');
+          if (anoRef === 'TODOS') return temValidacaoPagto;
+          return p.data_faturamento?.startsWith(anoRef) && temValidacaoPagto;
+        })
         .reduce((acc, p) => acc + p.valor_total, 0)
 
       // Faturamento Trimestre Atual
@@ -277,11 +281,12 @@ export default function AdminDashboard({
           <p className="text-sm text-slate-300 mt-1">Visão unificada de faturamento, revendas ativas/recorrentes e apuração de bônus</p>
         </div>
         <div className="flex items-center gap-3">
-          <select
+      <select
             value={anoRef}
             onChange={(e) => setAnoRef(e.target.value)}
             className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
           >
+            <option value="TODOS">Total Geral (Todos os Anos)</option>
             <option value="2026">Ano 2026</option>
             <option value="2027">Ano 2027</option>
           </select>
@@ -332,7 +337,7 @@ export default function AdminDashboard({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
-                <span>Faturamento Total ({anoRef})</span>
+                <span>Faturamento Total {anoRef === 'TODOS' ? '(Geral)' : `(${anoRef})`}</span>
                 <DollarSign className="w-4 h-4 text-emerald-600" />
               </div>
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
