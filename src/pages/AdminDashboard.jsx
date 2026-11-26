@@ -1,0 +1,580 @@
+import React, { useState, useMemo } from 'react'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+} from 'recharts'
+import {
+  Building2, Upload, UserPlus, Eye, CheckCircle2, Trash2, ShieldCheck, DollarSign, Users
+} from 'lucide-react'
+import {
+  formatCurrency, formatPercent, getRadisTier, buildRevendasConsolidado
+} from '../utils/radisCalculations'
+import { parseQlikPagFatFile, parseQlikCriadasFile } from '../utils/qlikParser'
+import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import DistributorDashboard from './DistributorDashboard'
+
+export default function AdminDashboard({
+  distribuidores,
+  projetosPagFat,
+  projetosFunil,
+  usuariosAcesso = [],
+  userEmail,
+  onDataRefresh,
+}) {
+  const [adminTab, setAdminTab] = useState('consolidado')
+  const [previewDistCnpj, setPreviewDistCnpj] = useState(null)
+  const [anoRef, setAnoRef] = useState('2026')
+  const [mesRef, setMesRef] = useState('11')
+
+  // Upload states
+  const [uploadingPag, setUploadingPag] = useState(false)
+  const [uploadingCri, setUploadingCri] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState('')
+
+  // Novo usuário state
+  const [novoEmail, setNovoEmail] = useState('')
+  const [novoNome, setNovoNome] = useState('')
+  const [novoCargo, setNovoCargo] = useState('Vendedor')
+  const [novoPerfil, setNovoPerfil] = useState('distribuidor')
+  const [novoCnpjRaiz, setNovoCnpjRaiz] = useState(distribuidores[0]?.cnpj_raiz || '')
+
+  // Consolidação de métricas por distribuidor
+  const resumoCanais = useMemo(() => {
+    const mInt = parseInt(mesRef, 10)
+    const qStart = Math.floor((mInt - 1) / 3) * 3 + 1
+    const qMeses = [qStart, qStart + 1, qStart + 2].map((m) => `${anoRef}-${String(m).padStart(2, '0')}`)
+
+    return distribuidores.map((dist) => {
+      const pags = projetosPagFat.filter((p) => p.cnpj_raiz === dist.cnpj_raiz && p.status_pagamento !== 'Cancelado')
+      const funis = projetosFunil.filter((f) => f.cnpj_raiz === dist.cnpj_raiz)
+
+      const fatAno = pags
+        .filter((p) => p.mes_referencia?.startsWith(anoRef) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+
+      const fatTri = pags
+        .filter((p) => qMeses.includes(p.mes_referencia) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+
+      const mediaTri = fatTri / 3
+      const tier = getRadisTier(mediaTri, dist.possui_equipe_3_pessoas)
+
+      const revendas = buildRevendasConsolidado(
+        pags,
+        funis,
+        {},
+        parseInt(anoRef, 10),
+        parseInt(mesRef, 10)
+      )
+
+      const ativas = revendas.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
+      const recorrentes = revendas.filter((r) => r.status === 'Recorrente').length
+      const bonusAtivas = ativas >= tier.minAtivas ? 3500 : 0
+      const bonusRecorrentes = recorrentes >= tier.minRecorrentes ? 3500 : 0
+      const comissaoTri = fatTri * tier.comissaoTotal
+
+      return {
+        ...dist,
+        fatAno,
+        fatTri,
+        mediaTri,
+        tier,
+        ativas,
+        recorrentes,
+        totalRevendas: revendas.length,
+        bonusAtivas,
+        bonusRecorrentes,
+        comissaoTri,
+        totalReceberTri: comissaoTri + bonusAtivas + bonusRecorrentes,
+        qtdPedidos: pags.length,
+      }
+    }).sort((a, b) => b.fatAno - a.fatAno)
+  }, [distribuidores, projetosPagFat, projetosFunil, anoRef, mesRef])
+
+  const totaisGlobais = useMemo(() => {
+    return resumoCanais.reduce(
+      (acc, c) => ({
+        faturamentoAno: acc.faturamentoAno + c.fatAno,
+        faturamentoTri: acc.faturamentoTri + c.fatTri,
+        revendasAtivas: acc.revendasAtivas + c.ativas,
+        revendasRecorrentes: acc.revendasRecorrentes + c.recorrentes,
+        comissoesEBonus: acc.comissoesEBonus + c.totalReceberTri,
+      }),
+      { faturamentoAno: 0, faturamentoTri: 0, revendasAtivas: 0, revendasRecorrentes: 0, comissoesEBonus: 0 }
+    )
+  }, [resumoCanais])
+
+  const handleUploadPagFat = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingPag(true)
+    setUploadStatus('Lendo e deduplicando planilha de Projetos Pagos/Faturados do Qlik...')
+    try {
+      const { projetos, distribuidores: distsFile, linhasBrutas } = await parseQlikPagFatFile(file)
+      if (!isSupabaseConfigured || !supabase) {
+        setUploadStatus(`Modo Demo: ${projetos.length} projetos únicos processados (de ${linhasBrutas} linhas brutas). Configure o Supabase para gravar no banco.`)
+        return
+      }
+
+      // 1. Garante que todos os distribuidores (por raiz CNPJ) existam
+      await supabase.from('distribuidores').upsert(distsFile, { onConflict: 'cnpj_raiz', ignoreDuplicates: true })
+
+      // 2. Insere/atualiza projetos em lotes de 500
+      for (let i = 0; i < projetos.length; i += 500) {
+        const batch = projetos.slice(i, i + 500)
+        const { error } = await supabase.from('projetos_pag_fat').upsert(batch, { onConflict: 'codigo_projeto' })
+        if (error) throw error
+      }
+
+      await supabase.from('importacoes_log').insert({
+        tipo_base: 'PAG_FAT',
+        arquivo_nome: file.name,
+        total_registros: projetos.length,
+        importado_por: userEmail,
+      })
+
+      setUploadStatus(`Sucesso! ${projetos.length} projetos únicos importados (de ${linhasBrutas} linhas do Qlik).`)
+      if (onDataRefresh) onDataRefresh()
+    } catch (err) {
+      setUploadStatus('Erro na importação: ' + err.message)
+    } finally {
+      setUploadingPag(false)
+    }
+  }
+
+  const handleUploadCriadas = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingCri(true)
+    setUploadStatus('Lendo planilha de Projetos Criados (Funil) do Qlik...')
+    try {
+      const { projetos, distribuidores: distsFile, linhasBrutas } = await parseQlikCriadasFile(file)
+      if (!isSupabaseConfigured || !supabase) {
+        setUploadStatus(`Modo Demo: ${projetos.length} propostas únicas processadas (de ${linhasBrutas} linhas brutas).`)
+        return
+      }
+
+      await supabase.from('distribuidores').upsert(distsFile, { onConflict: 'cnpj_raiz', ignoreDuplicates: true })
+
+      for (let i = 0; i < projetos.length; i += 500) {
+        const batch = projetos.slice(i, i + 500)
+        const { error } = await supabase.from('projetos_funil').upsert(batch, { onConflict: 'codigo_projeto' })
+        if (error) throw error
+      }
+
+      await supabase.from('importacoes_log').insert({
+        tipo_base: 'CRIADAS',
+        arquivo_nome: file.name,
+        total_registros: projetos.length,
+        importado_por: userEmail,
+      })
+
+      setUploadStatus(`Sucesso! ${projetos.length} propostas do funil atualizadas (de ${linhasBrutas} linhas).`)
+      if (onDataRefresh) onDataRefresh()
+    } catch (err) {
+      setUploadStatus('Erro na importação: ' + err.message)
+    } finally {
+      setUploadingCri(false)
+    }
+  }
+
+  const handleAddUsuario = async (e) => {
+    e.preventDefault()
+    if (!novoEmail) return
+    if (!isSupabaseConfigured || !supabase) {
+      alert('Configure o Supabase (.env) para salvar usuários no banco.')
+      return
+    }
+    try {
+      const { error } = await supabase.from('usuarios_acesso').upsert({
+        email: novoEmail.trim().toLowerCase(),
+        nome: novoNome.trim(),
+        cargo: novoCargo,
+        perfil: novoPerfil,
+        cnpj_raiz: novoPerfil === 'admin' ? null : novoCnpjRaiz,
+      })
+      if (error) throw error
+      setNovoEmail('')
+      setNovoNome('')
+      alert('Acesso liberado! Lembre-se de criar o usuário também em Authentication > Users no Supabase.')
+      if (onDataRefresh) onDataRefresh()
+    } catch (err) {
+      alert('Erro ao cadastrar e-mail: ' + err.message)
+    }
+  }
+
+  const handleToggleEquipe = async (dist) => {
+    if (!isSupabaseConfigured || !supabase) return
+    await supabase
+      .from('distribuidores')
+      .update({ possui_equipe_3_pessoas: !dist.possui_equipe_3_pessoas })
+      .eq('cnpj_raiz', dist.cnpj_raiz)
+    if (onDataRefresh) onDataRefresh()
+  }
+
+  // Modo Espelho: Admin visualizando o painel exato de um distribuidor específico
+  if (previewDistCnpj) {
+    const distObj = distribuidores.find((d) => d.cnpj_raiz === previewDistCnpj)
+    return (
+      <div className="space-y-4">
+        <div className="bg-slate-900 text-white px-4 py-3 rounded-xl flex items-center justify-between">
+          <span className="text-sm font-medium">
+            Modo Visualização de Canal: <strong>{distObj?.nome}</strong>
+          </span>
+          <button
+            onClick={() => setPreviewDistCnpj(null)}
+            className="px-3 py-1.5 bg-white text-slate-900 rounded-lg text-xs font-bold hover:bg-slate-100"
+          >
+            Voltar para Visão Geral Admin
+          </button>
+        </div>
+        <DistributorDashboard
+          distribuidor={distObj}
+          projetosPagFat={projetosPagFat.filter((p) => p.cnpj_raiz === previewDistCnpj)}
+          projetosFunil={projetosFunil.filter((f) => f.cnpj_raiz === previewDistCnpj)}
+          userEmail={userEmail}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header Admin */}
+      <div className="bg-slate-900 text-white rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">Painel Executivo Nacional</span>
+          <h1 className="text-2xl font-extrabold mt-1">Consolidado de Canais & Distribuidores RADIS</h1>
+          <p className="text-sm text-slate-300 mt-1">Visão unificada de faturamento, revendas ativas/recorrentes e apuração de bônus</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select
+            value={anoRef}
+            onChange={(e) => setAnoRef(e.target.value)}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
+          >
+            <option value="2026">Ano 2026</option>
+            <option value="2027">Ano 2027</option>
+          </select>
+          <select
+            value={mesRef}
+            onChange={(e) => setMesRef(e.target.value)}
+            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
+          >
+            <option value="01">Jan</option><option value="02">Fev</option><option value="03">Mar</option>
+            <option value="04">Abr</option><option value="05">Mai</option><option value="06">Jun</option>
+            <option value="07">Jul</option><option value="08">Ago</option><option value="09">Set</option>
+            <option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Sub-menu Admin */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => setAdminTab('consolidado')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold ${
+            adminTab === 'consolidado' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
+          }`}
+        >
+          <Building2 className="w-4 h-4" /> Visão Consolidada ({distribuidores.length} Canais)
+        </button>
+        <button
+          onClick={() => setAdminTab('upload')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold ${
+            adminTab === 'upload' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
+          }`}
+        >
+          <Upload className="w-4 h-4" /> Importar Base Qlik
+        </button>
+        <button
+          onClick={() => setAdminTab('acessos')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold ${
+            adminTab === 'acessos' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
+          }`}
+        >
+          <UserPlus className="w-4 h-4" /> Acessos por Distribuidor (5-6 E-mails)
+        </button>
+      </div>
+
+      {/* TAB 1: CONSOLIDADO NACIONAL */}
+      {adminTab === 'consolidado' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
+                <span>Faturamento Total ({anoRef})</span>
+                <DollarSign className="w-4 h-4 text-emerald-600" />
+              </div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-2">
+                {formatCurrency(totaisGlobais.faturamentoAno)}
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
+                <span>Faturamento Trimestre Atual</span>
+                <Building2 className="w-4 h-4 text-blue-600" />
+              </div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-2">
+                {formatCurrency(totaisGlobais.faturamentoTri)}
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
+                <span>Revendas Ativas / Recorrentes</span>
+                <Users className="w-4 h-4 text-emerald-600" />
+              </div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-2">
+                {totaisGlobais.revendasAtivas} <span className="text-sm font-normal text-slate-500">ativas</span> / {totaisGlobais.revendasRecorrentes} <span className="text-sm font-normal text-emerald-600">rec.</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
+                <span>Comissão + Bônus RADIS (Tri)</span>
+                <ShieldCheck className="w-4 h-4 text-amber-600" />
+              </div>
+              <div className="text-2xl font-extrabold text-emerald-700 mt-2">
+                {formatCurrency(totaisGlobais.comissoesEBonus)}
+              </div>
+            </div>
+          </div>
+
+          {/* Gráfico Top 10 Distribuidores */}
+          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+            <h3 className="font-bold text-slate-900 mb-4">Top 10 Distribuidores por Faturamento ({anoRef})</h3>
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={resumoCanais.slice(0, 10)} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" tickFormatter={(v) => `R$ ${(v / 1000).toFixed(0)}k`} />
+                  <YAxis type="category" dataKey="nome" width={180} tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => formatCurrency(v)} />
+                  <Bar dataKey="fatAno" name="Faturamento" fill="#059669" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Tabela Ranking Completo */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-200">
+              <h3 className="font-bold text-slate-900">Desempenho Individual por Distribuidor (Consolidado Raiz CNPJ)</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-800 text-white text-xs uppercase">
+                  <tr>
+                    <th className="px-4 py-3">Distribuidor (Raiz CNPJ)</th>
+                    <th className="px-4 py-3">Faturamento Ano</th>
+                    <th className="px-4 py-3">Média Tri</th>
+                    <th className="px-4 py-3">Faixa / %</th>
+                    <th className="px-4 py-3">Equipe 3P (+1%)</th>
+                    <th className="px-4 py-3">Revendas Ativas</th>
+                    <th className="px-4 py-3">Recorrentes</th>
+                    <th className="px-4 py-3">Total RADIS (Tri)</th>
+                    <th className="px-4 py-3">Painel</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {resumoCanais.map((c) => (
+                    <tr key={c.cnpj_raiz} className="hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-slate-900">{c.nome}</div>
+                        <div className="text-xs text-slate-500">Raiz: {c.cnpj_raiz} • SAP: {c.cod_sap || '-'} ({c.uf})</div>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-slate-900">{formatCurrency(c.fatAno)}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatCurrency(c.mediaTri)}</td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold text-xs">
+                          Faixa {c.tier.faixa} ({formatPercent(c.tier.comissaoTotal)})
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => handleToggleEquipe(c)}
+                          className={`px-2 py-1 rounded text-xs font-bold ${
+                            c.possui_equipe_3_pessoas ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {c.possui_equipe_3_pessoas ? 'SIM (+1%)' : 'NÃO'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 font-semibold">
+                        {c.ativas} <span className="text-xs text-slate-400">/ {c.tier.minAtivas}</span>
+                      </td>
+                      <td className="px-4 py-3 font-semibold">
+                        {c.recorrentes} <span className="text-xs text-slate-400">/ {c.tier.minRecorrentes}</span>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-emerald-700">{formatCurrency(c.totalReceberTri)}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => setPreviewDistCnpj(c.cnpj_raiz)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-slate-900 text-white text-xs font-semibold hover:bg-slate-700"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> Abrir
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: UPLOAD QLIK */}
+      {adminTab === 'upload' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Importação Automática das Planilhas do Qlik</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              O importador remove automaticamente linhas duplicadas de múltiplos componentes/pagamentos e agrupa filiais pela raiz do CNPJ (8 dígitos).
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-emerald-500 transition">
+              <Upload className="w-10 h-10 text-emerald-600 mx-auto mb-3" />
+              <h3 className="font-bold text-slate-900">1. Planilha de Projetos Pagos / Faturados</h3>
+              <p className="text-xs text-slate-500 mt-1 mb-4">
+                Arquivo Qlik com status de pagamento e emissão de NF (ex: "Sem título - 26 de novembro.xlsx")
+              </p>
+              <label className="inline-block px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-emerald-700">
+                {uploadingPag ? 'Processando...' : 'Selecionar Arquivo Pagos (.xlsx)'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadPagFat} disabled={uploadingPag} className="hidden" />
+              </label>
+            </div>
+
+            <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-500 transition">
+              <Upload className="w-10 h-10 text-blue-600 mx-auto mb-3" />
+              <h3 className="font-bold text-slate-900">2. Planilha de Projetos Criados (Funil)</h3>
+              <p className="text-xs text-slate-500 mt-1 mb-4">
+                Arquivo Qlik de propostas criadas no mês (ex: "Criadas Campanha - 26 de novembro.xlsx")
+              </p>
+              <label className="inline-block px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-blue-700">
+                {uploadingCri ? 'Processando...' : 'Selecionar Arquivo Criadas (.xlsx)'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadCriadas} disabled={uploadingCri} className="hidden" />
+              </label>
+            </div>
+          </div>
+
+          {uploadStatus && (
+            <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{uploadStatus}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: GESTÃO DE ACESSOS */}
+      {adminTab === 'acessos' && (
+        <div className="space-y-6">
+          <form onSubmit={handleAddUsuario} className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <h2 className="text-lg font-bold text-slate-900">Liberar E-mail de Acesso (Vendedor, Gerente ou Admin)</h2>
+            <p className="text-xs text-slate-500">
+              Todos os e-mails vinculados ao mesmo Distribuidor (Raiz CNPJ) terão acesso completo aos resultados daquele canal.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <input
+                type="email"
+                required
+                placeholder="email@distribuidor.com.br"
+                value={novoEmail}
+                onChange={(e) => setNovoEmail(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <input
+                type="text"
+                placeholder="Nome do usuário"
+                value={novoNome}
+                onChange={(e) => setNovoNome(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+              <select
+                value={novoCargo}
+                onChange={(e) => setNovoCargo(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="Vendedor">Vendedor</option>
+                <option value="Gerente">Gerente</option>
+                <option value="Diretor">Diretor</option>
+                <option value="Engenheiro">Engenheiro</option>
+                <option value="Admin">Administrador</option>
+              </select>
+              <select
+                value={novoPerfil}
+                onChange={(e) => setNovoPerfil(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="distribuidor">Perfil Distribuidor</option>
+                <option value="admin">Perfil Admin Global</option>
+              </select>
+              {novoPerfil === 'distribuidor' && (
+                <select
+                  value={novoCnpjRaiz}
+                  onChange={(e) => setNovoCnpjRaiz(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {distribuidores.map((d) => (
+                    <option key={d.cnpj_raiz} value={d.cnpj_raiz}>
+                      {d.nome} ({d.cnpj_raiz})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <button
+              type="submit"
+              className="px-5 py-2 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700"
+            >
+              Cadastrar Permissão
+            </button>
+          </form>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-800 text-white text-xs uppercase">
+                <tr>
+                  <th className="px-4 py-3">E-mail</th>
+                  <th className="px-4 py-3">Nome / Cargo</th>
+                  <th className="px-4 py-3">Perfil</th>
+                  <th className="px-4 py-3">Distribuidor Vinculado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {usuariosAcesso.map((u) => {
+                  const dist = distribuidores.find((d) => d.cnpj_raiz === u.cnpj_raiz)
+                  return (
+                    <tr key={u.email}>
+                      <td className="px-4 py-3 font-medium text-slate-900">{u.email}</td>
+                      <td className="px-4 py-3 text-slate-600">{u.nome || '-'} ({u.cargo || '-'})</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                          {u.perfil.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {u.perfil === 'admin' ? 'TODOS OS CANAIS' : `${dist?.nome || u.cnpj_raiz}`}
+                      </td>
+                    </tr>
+                  )
+                })}
+                {usuariosAcesso.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-6 text-center text-slate-500">
+                      Nenhum usuário listado ainda (em Modo Demo, todos os perfis estão simulados).
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
