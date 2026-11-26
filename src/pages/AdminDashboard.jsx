@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
 import {
-  Building2, Upload, UserPlus, Eye, CheckCircle2, Trash2, ShieldCheck, DollarSign, Users
+  Building2, Upload, UserPlus, Eye, CheckCircle2, ShieldCheck, DollarSign, Users
 } from 'lucide-react'
 import {
   formatCurrency, formatPercent, getRadisTier, buildRevendasConsolidado
@@ -37,6 +37,34 @@ export default function AdminDashboard({
   const [novoPerfil, setNovoPerfil] = useState('distribuidor')
   const [novoCnpjRaiz, setNovoCnpjRaiz] = useState(distribuidores[0]?.cnpj_raiz || '')
 
+  // Tratamento e Filtragem de Dados com as Regras Solicitadas
+  const projetosProcessados = useMemo(() => {
+    if (!projetosPagFat) return []
+    // Remove códigos de projetos duplicados baseados no código da venda
+    const unicos = Array.from(
+      new Map(projetosPagFat.map(item => [item.codigo_projeto, item])).values()
+    )
+    return unicos.map(p => {
+      // Garante os 8 dígitos da raiz do CNPJ
+      const cnpjLimpo = p.cnpj_raiz ? String(p.cnpj_raiz).replace(/\D/g, '') : ''
+      const cnpjRaiz8 = cnpjLimpo.substring(0, 8)
+
+      // Comissão = % Comissão * Valor Produtos com Desconto
+      const percComissao = Number(p.percentual_comissao) || 0
+      const valProdDesc = Number(p.valor_produtos_com_desconto) || Number(p.valor_produtos) || 0
+      const comissaoCalculada = percComissao * valProdDesc
+
+      return {
+        ...p,
+        cnpj_raiz: cnpjRaiz8,
+        valor_total: Number(p.valor_total) || 0,
+        comissao_calculada: comissaoCalculada,
+        // Data de faturamento considerada pela data de emissão da nota fiscal
+        data_faturamento: p.data_emissao_nf || p.data_pagamento || p.data_criacao
+      }
+    })
+  }, [projetosPagFat])
+
   // Consolidação de métricas por distribuidor
   const resumoCanais = useMemo(() => {
     const mInt = parseInt(mesRef, 10)
@@ -44,19 +72,29 @@ export default function AdminDashboard({
     const qMeses = [qStart, qStart + 1, qStart + 2].map((m) => `${anoRef}-${String(m).padStart(2, '0')}`)
 
     return distribuidores.map((dist) => {
-      const pags = projetosPagFat.filter((p) => p.cnpj_raiz === dist.cnpj_raiz && p.status_pagamento !== 'Cancelado')
-      const funis = projetosFunil.filter((f) => f.cnpj_raiz === dist.cnpj_raiz)
+      const pags = projetosProcessados.filter((p) => p.cnpj_raiz === dist.cnpj_raiz && p.status_pagamento !== 'Cancelado')
+      const funis = projetosFunil.filter((f) => {
+        const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\D/g, '').substring(0, 8) : ''
+        return fCnpj === dist.cnpj_raiz
+      })
 
+      // Faturamento Ano baseado no Valor Total e Data de Emissão da Nota Fiscal
       const fatAno = pags
-        .filter((p) => p.mes_referencia?.startsWith(anoRef) && (p.numero_nf || p.status_pagamento === 'Pago'))
-        .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+        .filter((p) => p.data_faturamento?.startsWith(anoRef) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .reduce((acc, p) => acc + p.valor_total, 0)
 
+      // Faturamento Trimestre Atual
       const fatTri = pags
-        .filter((p) => qMeses.includes(p.mes_referencia) && (p.numero_nf || p.status_pagamento === 'Pago'))
-        .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+        .filter((p) => qMeses.some(m => p.data_faturamento?.startsWith(m)) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .reduce((acc, p) => acc + p.valor_total, 0)
 
       const mediaTri = fatTri / 3
       const tier = getRadisTier(mediaTri, dist.possui_equipe_3_pessoas)
+
+      // Apuração de comissão utilizando a comissão calculada (% comissao * valor produto com desconto)
+      const comissaoTri = pags
+        .filter((p) => qMeses.some(m => p.data_faturamento?.startsWith(m)) && (p.numero_nf || p.status_pagamento === 'Pago'))
+        .reduce((acc, p) => acc + p.comissao_calculada, 0)
 
       const revendas = buildRevendasConsolidado(
         pags,
@@ -68,9 +106,9 @@ export default function AdminDashboard({
 
       const ativas = revendas.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
       const recorrentes = revendas.filter((r) => r.status === 'Recorrente').length
+
       const bonusAtivas = ativas >= tier.minAtivas ? 3500 : 0
       const bonusRecorrentes = recorrentes >= tier.minRecorrentes ? 3500 : 0
-      const comissaoTri = fatTri * tier.comissaoTotal
 
       return {
         ...dist,
@@ -88,7 +126,7 @@ export default function AdminDashboard({
         qtdPedidos: pags.length,
       }
     }).sort((a, b) => b.fatAno - a.fatAno)
-  }, [distribuidores, projetosPagFat, projetosFunil, anoRef, mesRef])
+  }, [distribuidores, projetosProcessados, projetosFunil, anoRef, mesRef])
 
   const totaisGlobais = useMemo(() => {
     return resumoCanais.reduce(
@@ -114,24 +152,18 @@ export default function AdminDashboard({
         setUploadStatus(`Modo Demo: ${projetos.length} projetos únicos processados (de ${linhasBrutas} linhas brutas). Configure o Supabase para gravar no banco.`)
         return
       }
-
-      // 1. Garante que todos os distribuidores (por raiz CNPJ) existam
       await supabase.from('distribuidores').upsert(distsFile, { onConflict: 'cnpj_raiz', ignoreDuplicates: true })
-
-      // 2. Insere/atualiza projetos em lotes de 500
       for (let i = 0; i < projetos.length; i += 500) {
         const batch = projetos.slice(i, i + 500)
         const { error } = await supabase.from('projetos_pag_fat').upsert(batch, { onConflict: 'codigo_projeto' })
         if (error) throw error
       }
-
       await supabase.from('importacoes_log').insert({
         tipo_base: 'PAG_FAT',
         arquivo_nome: file.name,
         total_registros: projetos.length,
         importado_por: userEmail,
       })
-
       setUploadStatus(`Sucesso! ${projetos.length} projetos únicos importados (de ${linhasBrutas} linhas do Qlik).`)
       if (onDataRefresh) onDataRefresh()
     } catch (err) {
@@ -152,22 +184,18 @@ export default function AdminDashboard({
         setUploadStatus(`Modo Demo: ${projetos.length} propostas únicas processadas (de ${linhasBrutas} linhas brutas).`)
         return
       }
-
       await supabase.from('distribuidores').upsert(distsFile, { onConflict: 'cnpj_raiz', ignoreDuplicates: true })
-
       for (let i = 0; i < projetos.length; i += 500) {
         const batch = projetos.slice(i, i + 500)
         const { error } = await supabase.from('projetos_funil').upsert(batch, { onConflict: 'codigo_projeto' })
         if (error) throw error
       }
-
       await supabase.from('importacoes_log').insert({
         tipo_base: 'CRIADAS',
         arquivo_nome: file.name,
         total_registros: projetos.length,
         importado_por: userEmail,
       })
-
       setUploadStatus(`Sucesso! ${projetos.length} propostas do funil atualizadas (de ${linhasBrutas} linhas).`)
       if (onDataRefresh) onDataRefresh()
     } catch (err) {
@@ -195,7 +223,7 @@ export default function AdminDashboard({
       if (error) throw error
       setNovoEmail('')
       setNovoNome('')
-      alert('Acesso liberado! Lembre-se de criar o usuário também em Authentication > Users no Supabase.')
+      alert('Acesso liberado!')
       if (onDataRefresh) onDataRefresh()
     } catch (err) {
       alert('Erro ao cadastrar e-mail: ' + err.message)
@@ -211,7 +239,6 @@ export default function AdminDashboard({
     if (onDataRefresh) onDataRefresh()
   }
 
-  // Modo Espelho: Admin visualizando o painel exato de um distribuidor específico
   if (previewDistCnpj) {
     const distObj = distribuidores.find((d) => d.cnpj_raiz === previewDistCnpj)
     return (
@@ -229,8 +256,11 @@ export default function AdminDashboard({
         </div>
         <DistributorDashboard
           distribuidor={distObj}
-          projetosPagFat={projetosPagFat.filter((p) => p.cnpj_raiz === previewDistCnpj)}
-          projetosFunil={projetosFunil.filter((f) => f.cnpj_raiz === previewDistCnpj)}
+          projetosPagFat={projetosProcessados.filter((p) => p.cnpj_raiz === previewDistCnpj)}
+          projetosFunil={projetosFunil.filter((f) => {
+            const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\D/g, '').substring(0, 8) : ''
+            return fCnpj === previewDistCnpj
+          })}
           userEmail={userEmail}
         />
       </div>
@@ -292,7 +322,7 @@ export default function AdminDashboard({
             adminTab === 'acessos' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-700'
           }`}
         >
-          <UserPlus className="w-4 h-4" /> Acessos por Distribuidor (5-6 E-mails)
+          <UserPlus className="w-4 h-4" /> Acessos por Distribuidor
         </button>
       </div>
 
@@ -309,7 +339,6 @@ export default function AdminDashboard({
                 {formatCurrency(totaisGlobais.faturamentoAno)}
               </div>
             </div>
-
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
                 <span>Faturamento Trimestre Atual</span>
@@ -319,7 +348,6 @@ export default function AdminDashboard({
                 {formatCurrency(totaisGlobais.faturamentoTri)}
               </div>
             </div>
-
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
                 <span>Revendas Ativas / Recorrentes</span>
@@ -329,7 +357,6 @@ export default function AdminDashboard({
                 {totaisGlobais.revendasAtivas} <span className="text-sm font-normal text-slate-500">ativas</span> / {totaisGlobais.revendasRecorrentes} <span className="text-sm font-normal text-emerald-600">rec.</span>
               </div>
             </div>
-
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
                 <span>Comissão + Bônus RADIS (Tri)</span>
@@ -431,28 +458,26 @@ export default function AdminDashboard({
           <div>
             <h2 className="text-lg font-bold text-slate-900">Importação Automática das Planilhas do Qlik</h2>
             <p className="text-sm text-slate-500 mt-1">
-              O importador remove automaticamente linhas duplicadas de múltiplos componentes/pagamentos e agrupa filiais pela raiz do CNPJ (8 dígitos).
+              O importador remove automaticamente linhas duplicadas de múltiplos componentes/pagamentos e extrai a raiz do CNPJ (8 dígitos).
             </p>
           </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-emerald-500 transition">
               <Upload className="w-10 h-10 text-emerald-600 mx-auto mb-3" />
               <h3 className="font-bold text-slate-900">1. Planilha de Projetos Pagos / Faturados</h3>
               <p className="text-xs text-slate-500 mt-1 mb-4">
-                Arquivo Qlik com status de pagamento e emissão de NF (ex: "Sem título - 26 de novembro.xlsx")
+                Arquivo Qlik com status de pagamento e emissão de NF
               </p>
               <label className="inline-block px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-emerald-700">
                 {uploadingPag ? 'Processando...' : 'Selecionar Arquivo Pagos (.xlsx)'}
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadPagFat} disabled={uploadingPag} className="hidden" />
               </label>
             </div>
-
             <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-500 transition">
               <Upload className="w-10 h-10 text-blue-600 mx-auto mb-3" />
               <h3 className="font-bold text-slate-900">2. Planilha de Projetos Criados (Funil)</h3>
               <p className="text-xs text-slate-500 mt-1 mb-4">
-                Arquivo Qlik de propostas criadas no mês (ex: "Criadas Campanha - 26 de novembro.xlsx")
+                Arquivo Qlik de propostas criadas no mês
               </p>
               <label className="inline-block px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-blue-700">
                 {uploadingCri ? 'Processando...' : 'Selecionar Arquivo Criadas (.xlsx)'}
@@ -460,7 +485,6 @@ export default function AdminDashboard({
               </label>
             </div>
           </div>
-
           {uploadStatus && (
             <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-sm flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
@@ -474,10 +498,7 @@ export default function AdminDashboard({
       {adminTab === 'acessos' && (
         <div className="space-y-6">
           <form onSubmit={handleAddUsuario} className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-bold text-slate-900">Liberar E-mail de Acesso (Vendedor, Gerente ou Admin)</h2>
-            <p className="text-xs text-slate-500">
-              Todos os e-mails vinculados ao mesmo Distribuidor (Raiz CNPJ) terão acesso completo aos resultados daquele canal.
-            </p>
+            <h2 className="text-lg font-bold text-slate-900">Liberar E-mail de Acesso</h2>
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <input
                 type="email"
@@ -502,7 +523,6 @@ export default function AdminDashboard({
                 <option value="Vendedor">Vendedor</option>
                 <option value="Gerente">Gerente</option>
                 <option value="Diretor">Diretor</option>
-                <option value="Engenheiro">Engenheiro</option>
                 <option value="Admin">Administrador</option>
               </select>
               <select
@@ -534,7 +554,6 @@ export default function AdminDashboard({
               Cadastrar Permissão
             </button>
           </form>
-
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
             <table className="w-full text-sm text-left">
               <thead className="bg-slate-800 text-white text-xs uppercase">
@@ -563,13 +582,6 @@ export default function AdminDashboard({
                     </tr>
                   )
                 })}
-                {usuariosAcesso.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-6 text-center text-slate-500">
-                      Nenhum usuário listado ainda (em Modo Demo, todos os perfis estão simulados).
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
