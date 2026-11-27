@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react'
-import { Sun, LogOut, Shield, Building2, Lock, Mail } from 'lucide-react'
+import { Sun, LogOut, Shield, Building2, Lock, Mail, RefreshCw } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 import { DEMO_DISTRIBUIDORES, DEMO_PAG_FAT, DEMO_FUNIL } from './utils/demoData'
 import DistributorDashboard from './pages/DistributorDashboard'
 import AdminDashboard from './pages/AdminDashboard'
 
 // Supabase/PostgREST limita cada resposta; buscar páginas até esgotar a tabela.
+const normalizeCompanyName = (value = '') => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
 const TABLE_ORDER_COLUMNS = {
   distribuidores: 'cnpj_raiz',
   projetos_pag_fat: 'codigo_projeto',
@@ -38,6 +40,8 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [userAccess, setUserAccess] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [lastDataRefresh, setLastDataRefresh] = useState(null)
 
   // Login form
   const [email, setEmail] = useState('')
@@ -89,8 +93,9 @@ export default function App() {
     return () => subscription.unsubscribe()
   }, [])
 
-  const loadUserAndData = async (userEmail) => {
-    setLoading(true)
+  const loadUserAndData = async (userEmail, options = {}) => {
+    const silent = options.silent === true
+    if (!silent) setLoading(true)
     setAuthError('')
     try {
       const { data: accessData, error: accessErr } = await supabase
@@ -130,6 +135,7 @@ export default function App() {
       setProjetosPagFat(pagData)
       setProjetosFunil(funilData)
       setCrmRecords(crmData)
+      setLastDataRefresh(new Date())
 
       if (accessData.perfil === 'admin') {
         setUsuariosAcesso(await fetchAllRows('usuarios_acesso'))
@@ -143,7 +149,7 @@ export default function App() {
       setProjetosFunil([])
       setCrmRecords([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -156,6 +162,13 @@ export default function App() {
 
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut()
+  }
+
+  const handleManualRefresh = async () => {
+    if (!activeEmail || refreshing) return
+    setRefreshing(true)
+    try { await loadUserAndData(activeEmail, { silent: true }) }
+    finally { setRefreshing(false) }
   }
 
   if (loading) {
@@ -278,6 +291,8 @@ export default function App() {
   const activeCnpj = isSupabaseConfigured ? userAccess?.cnpj_raiz : demoCnpjRaiz
   const activeEmail = isSupabaseConfigured ? session?.user?.email : 'demo@radis.com.br'
   const currentDistribuidor = distribuidores.find((d) => d.cnpj_raiz === activeCnpj) || distribuidores[0]
+  const currentCompanyKey = normalizeCompanyName(currentDistribuidor?.nome || '')
+  const currentDistribuidorRoots = new Set(distribuidores.filter(d => normalizeCompanyName(d.nome || '') === currentCompanyKey).map(d => String(d.cnpj_raiz)))
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -325,6 +340,7 @@ export default function App() {
               </div>
             )}
 
+            {isSupabaseConfigured && <button onClick={handleManualRefresh} disabled={refreshing || loading} title={lastDataRefresh ? 'Última atualização: ' + lastDataRefresh.toLocaleTimeString('pt-BR') : 'Atualizar dados do Supabase'} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"><RefreshCw className={'w-3.5 h-3.5 ' + (refreshing ? 'animate-spin' : '')} />{refreshing ? 'Atualizando...' : 'Atualizar'}</button>}
             <span className="hidden md:inline text-xs text-slate-500 font-medium">{activeEmail}</span>
 
             {isSupabaseConfigured && (
@@ -357,14 +373,14 @@ export default function App() {
             projetosFunil={projetosFunil}
             usuariosAcesso={usuariosAcesso}
             userEmail={activeEmail}
-            onDataRefresh={() => loadUserAndData(activeEmail)}
+            onDataRefresh={() => loadUserAndData(activeEmail, { silent: true })}
           />
         ) : (
           <DistributorDashboard
             distribuidor={currentDistribuidor}
-            projetosPagFat={projetosPagFat.filter((p) => p.cnpj_raiz === currentDistribuidor?.cnpj_raiz)}
-            projetosFunil={projetosFunil.filter((f) => f.cnpj_raiz === currentDistribuidor?.cnpj_raiz)}
-            crmRecords={crmRecords}
+            projetosPagFat={projetosPagFat.filter((p) => currentDistribuidorRoots.has(String(p.cnpj_raiz)))}
+            projetosFunil={projetosFunil.filter((f) => currentDistribuidorRoots.has(String(f.cnpj_raiz)))}
+            crmRecords={crmRecords.filter((r) => currentDistribuidorRoots.has(String(r.cnpj_raiz)))}
             userEmail={activeEmail}
             onCrmUpdated={() => loadUserAndData(activeEmail)}
           />
