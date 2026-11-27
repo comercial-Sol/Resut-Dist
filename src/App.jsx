@@ -6,12 +6,28 @@ import DistributorDashboard from './pages/DistributorDashboard'
 import AdminDashboard from './pages/AdminDashboard'
 
 // Supabase/PostgREST limita cada resposta; buscar páginas até esgotar a tabela.
+const TABLE_ORDER_COLUMNS = {
+  distribuidores: 'cnpj_raiz',
+  projetos_pag_fat: 'codigo_projeto',
+  projetos_funil: 'codigo_projeto',
+  revendas_crm: 'revenda_cnpj',
+  usuarios_acesso: 'email',
+}
+
+// Paginação determinística: sem ORDER BY, páginas sucessivas podem repetir ou
+// pular registros em tabelas grandes enquanto o conjunto muda.
 async function fetchAllRows(table, select = '*') {
   const pageSize = 1000
+  const orderColumn = TABLE_ORDER_COLUMNS[table]
+  if (!orderColumn) throw new Error(`Tabela sem coluna de ordenação configurada: ${table}`)
   const all = []
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase.from(table).select(select).range(from, from + pageSize - 1)
-    if (error) throw error
+    const { data, error } = await supabase
+      .from(table)
+      .select(select)
+      .order(orderColumn, { ascending: true })
+      .range(from, from + pageSize - 1)
+    if (error) throw new Error(`Falha ao ler ${table} (registros ${from + 1} a ${from + pageSize}): ${error.message}`)
     all.push(...(data || []))
     if (!data || data.length < pageSize) break
   }
