@@ -142,11 +142,12 @@ export default function DistributorDashboard({
       total_faturado: pagMap.get(r.revenda_cnpj)?.total_faturado || 0,
       qtd_projetos_vendidos: pagMap.get(r.revenda_cnpj)?.qtd_projetos_vendidos || 0,
       qtd_propostas_criadas: funilMap.get(r.revenda_cnpj) || 0,
-    }))
+    })).filter((r) => r.total_faturado > 0 || r.qtd_propostas_criadas > 0 || r.data_ultimo_contato || r.observacoes)
   }, [revendasHistorico, projetosFaturados, projetosFunilPeriodo])
 
-  const qtdAtivas = revendas.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
-  const qtdRecorrentes = revendas.filter((r) => r.status === 'Recorrente').length
+  // Os gatilhos RADIS continuam medindo a carteira histórica no último mês selecionado.
+  const qtdAtivas = revendasHistorico.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
+  const qtdRecorrentes = revendasHistorico.filter((r) => r.status === 'Recorrente').length
   const bateuBonusAtivas = qtdAtivas >= tierPeriodo.minAtivas
   const bateuBonusRecorrentes = qtdRecorrentes >= tierPeriodo.minRecorrentes
 
@@ -319,6 +320,7 @@ export default function DistributorDashboard({
                   <span className="text-xs text-slate-500">({formatPercent(tierPeriodo.comissaoBase)} base + {formatPercent(tierPeriodo.bonusEquipe)} equipe)</span>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">Faturamento reconhecido no período: <strong className="text-slate-800">{formatCurrency(faturamentoPeriodo)}</strong> · média mensal: {formatCurrency(faturamentoPeriodo / selectedMonthCount)}</p>
+                <p className="mt-1 text-[11px] text-slate-400">A faixa é uma estimativa pela média do período selecionado; a apuração oficial de comissão segue o trimestre da política RADIS.</p>
               </div>
               <div className="text-right">
                 <span className="text-xs text-slate-500">Comissão estimada</span>
