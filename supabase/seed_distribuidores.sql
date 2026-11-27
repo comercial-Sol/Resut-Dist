@@ -115,3 +115,10 @@ INSERT INTO distribuidores (cnpj_raiz, nome, uf, cod_sap) VALUES
   ('51477354', 'CASTILHO GUARULHOS COM DE EQUIP ELETRONICOS LTDA', '', ''),
   ('65165087', 'SPVIX DISTRIBUIDORA LTDA', '', '')
 ON CONFLICT (cnpj_raiz) DO UPDATE SET nome = EXCLUDED.nome, uf = COALESCE(NULLIF(EXCLUDED.uf, ''), distribuidores.uf);
+
+
+-- Relação explícita aprovada entre as duas raízes da 2M CONNECTIONS LTDA.
+-- Não inferir vínculos por semelhança do nome da empresa.
+INSERT INTO private.distribuidor_cnpj_links (cnpj_raiz_a, cnpj_raiz_b, ativo)
+VALUES ('41649269', '76823327', true)
+ON CONFLICT (cnpj_raiz_a, cnpj_raiz_b) DO UPDATE SET ativo = true;
