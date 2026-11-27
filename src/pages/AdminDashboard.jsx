@@ -161,6 +161,16 @@ export default function AdminDashboard({
     })
   }, [resumoCanais, rankingSearch, rankingSort])
 
+  const valorFunilAbertoGlobal = useMemo(() => projetosFunil
+    .filter((f) => inSelectedPeriod(f, selectedYears, selectedMonths, 'funil'))
+    .filter((f) => {
+      const status = String(f.status_pagamento || '').trim().toLowerCase()
+      const stage = String(f.etapa_venda || '').trim().toLowerCase()
+      return !['pago', 'cancelado', 'recusado'].includes(status) && stage !== 'projeto cancelado'
+    })
+    .reduce((sum, f) => sum + (Number(f.valor_total) || 0), 0),
+  [projetosFunil, selectedYears, selectedMonths])
+
   const totaisGlobais = useMemo(() => {
     return resumoCanais.reduce(
       (acc, c) => ({
@@ -523,15 +533,17 @@ export default function AdminDashboard({
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
                 {formatCurrency(totaisGlobais.faturamentoAno)}
               </div>
+              <p className="mt-1 text-[11px] text-slate-400">Projetos pagos ou com NF no período selecionado</p>
             </div>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
-                <span>Faturamento no Período</span>
+                <span>Valor do Funil em Aberto</span>
                 <Building2 className="w-4 h-4 text-blue-600" />
               </div>
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
-                {formatCurrency(totaisGlobais.faturamentoTri)}
+                {formatCurrency(valorFunilAbertoGlobal)}
               </div>
+              <p className="mt-1 text-[11px] text-slate-400">Propostas abertas do Funil no período selecionado</p>
             </div>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
@@ -550,6 +562,7 @@ export default function AdminDashboard({
               <div className="text-2xl font-extrabold text-emerald-700 mt-2">
                 {formatCurrency(totaisGlobais.comissoesEBonus)}
               </div>
+              <p className="mt-1 text-[11px] text-slate-400">Estimativa pela média mensal filtrada; apuração oficial conforme trimestre RADIS</p>
             </div>
           </div>
 
