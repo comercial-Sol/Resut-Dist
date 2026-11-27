@@ -325,6 +325,36 @@ export default function AdminDashboard({
     setSolicitacaoStatus('Senha temporária definida e e-mail confirmado para ' + email + '. Entregue a senha ao usuário por canal seguro e solicite a troca após o primeiro acesso.')
   }
 
+  const handleDeleteUser = async (email) => {
+    if (String(email).toLowerCase() === String(userEmail).toLowerCase()) {
+      setSolicitacaoStatus('Por segurança, não é permitido excluir a própria conta administradora por aqui.')
+      return
+    }
+    const confirmed = window.confirm(
+      'ATENÇÃO: excluir ' + email + ' removerá o vínculo do portal e a conta de autenticação. Esta ação não apaga projetos nem dados comerciais. Deseja continuar?'
+    )
+    if (!confirmed) return
+    setProcessingUser(email)
+    setSolicitacaoStatus('')
+    try {
+      const { data, error } = await supabase.functions.invoke('approve-access-request', {
+        body: { action: 'delete_user', email }
+      })
+      if (error) {
+        let detail = error.message || 'Falha ao excluir a conta.'
+        try { const payload = await error.context?.json?.(); if (payload?.error) detail = payload.error } catch {}
+        throw new Error(detail)
+      }
+      if (!data?.ok) throw new Error(data?.error || 'O servidor não confirmou a exclusão.')
+      setSolicitacaoStatus('Conta ' + email + ' excluída. O acesso ao portal foi revogado; nenhum dado comercial foi apagado.')
+      if (onDataRefresh) await onDataRefresh()
+    } catch (err) {
+      setSolicitacaoStatus('Não foi possível concluir a exclusão de ' + email + ': ' + err.message)
+    } finally {
+      setProcessingUser('')
+    }
+  }
+
   const handleConfirmAccountEmail = async (email) => {
     setSolicitacaoStatus('')
     const { data, error } = await supabase.functions.invoke('approve-access-request', { body: { action: 'confirm_email', email } })
@@ -722,7 +752,7 @@ export default function AdminDashboard({
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th><th className="px-4 py-3">Ações de senha</th></tr></thead>
                 <tbody className="divide-y divide-slate-200">
-                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3 min-w-[260px]"><div className="flex flex-col items-start gap-2"><button onClick={()=>handleSendPasswordReset(u.email)} className="rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">Enviar link para redefinir senha</button><button onClick={()=>handleConfirmAccountEmail(u.email)} className="rounded border border-blue-300 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">Confirmar e-mail da conta</button><label className="mt-1 text-xs font-semibold text-slate-700">Definir senha manualmente</label><input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Digite senha temporária (12+)" value={senhaAdmin[u.email] || ''} onChange={e=>setSenhaAdmin(v=>({...v,[u.email]:e.target.value}))} className="w-full rounded border border-slate-300 px-2 py-2 text-xs" /><button onClick={()=>handleSetAccountPassword(u.email)} className="rounded bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700">Definir senha e confirmar e-mail</button></div></td></tr>})}
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3 min-w-[260px]"><div className="flex flex-col items-start gap-2"><button onClick={()=>handleSendPasswordReset(u.email)} className="rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">Enviar link para redefinir senha</button><button onClick={()=>handleConfirmAccountEmail(u.email)} className="rounded border border-blue-300 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">Confirmar e-mail da conta</button><label className="mt-1 text-xs font-semibold text-slate-700">Definir senha manualmente</label><input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Digite senha temporária (12+)" value={senhaAdmin[u.email] || ''} onChange={e=>setSenhaAdmin(v=>({...v,[u.email]:e.target.value}))} className="w-full rounded border border-slate-300 px-2 py-2 text-xs" /><button onClick={()=>handleSetAccountPassword(u.email)} className="rounded bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700">Definir senha e confirmar e-mail</button><button disabled={processingUser===u.email || String(userEmail).toLowerCase()===String(u.email).toLowerCase()} onClick={()=>handleDeleteUser(u.email)} className="rounded border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40">{processingUser===u.email?'Excluindo...':'Excluir conta e e-mail'}</button></div></td></tr>})}
                 </tbody>
               </table>
             </div>
