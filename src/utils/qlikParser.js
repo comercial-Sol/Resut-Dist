@@ -72,16 +72,63 @@ const first = (...values) => values.find((value) => {
   return true
 }) ?? ''
 
+function normalizeHeader(value) {
+  return String(value ?? '')
+    .replace(/^\\uFEFF/, '')
+    .normalize('NFD')
+    .replace(/[\\u0300-\\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
 function readRows(file, requiredColumns = []) {
   return file.arrayBuffer().then((buffer) => {
-    const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: false, dense: false })
     if (!workbook.SheetNames.length) throw new Error('A planilha não contém abas.')
-    const sheet = workbook.Sheets[workbook.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
-    if (!rows.length) throw new Error('A primeira aba está vazia.')
-    const available = new Set(Object.keys(rows[0] || {}))
-    const missing = requiredColumns.filter((column) => !available.has(column))
-    if (missing.length) throw new Error(`Colunas obrigatórias ausentes: ${missing.join('; ')}`)
+
+    const requiredByNormalized = new Map(requiredColumns.map((column) => [normalizeHeader(column), column]))
+    let best = null
+
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName]
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true, blankrows: false })
+      const scanLimit = Math.min(matrix.length, 50)
+
+      for (let rowIndex = 0; rowIndex < scanLimit; rowIndex++) {
+        const headerRow = matrix[rowIndex] || []
+        const normalizedHeaders = headerRow.map(normalizeHeader)
+        const found = new Set(normalizedHeaders.filter((key) => requiredByNormalized.has(key)))
+        const score = found.size
+        if (!best || score > best.score) {
+          best = { sheetName, matrix, rowIndex, headerRow, score, found }
+        }
+        if (score === requiredColumns.length) break
+      }
+      if (best?.score === requiredColumns.length) break
+    }
+
+    const missing = requiredColumns.filter((column) => !best?.found.has(normalizeHeader(column)))
+    if (!best || best.score === 0) {
+      throw new Error('Não foi possível localizar a linha de cabeçalho. Verifique se o arquivo é uma exportação Qlik válida.')
+    }
+    if (missing.length) {
+      throw new Error(`Aba "${best.sheetName}": colunas obrigatórias não localizadas (${best.score}/${requiredColumns.length}): ${missing.join('; ')}. Confira os títulos da exportação Qlik.`)
+    }
+
+    const headers = best.headerRow.map((header) => {
+      const raw = String(header ?? '').replace(/^\\uFEFF/, '').trim()
+      return requiredByNormalized.get(normalizeHeader(raw)) || raw
+    })
+    const rows = []
+    for (const cells of best.matrix.slice(best.rowIndex + 1)) {
+      if (!cells || cells.every((cell) => cell === null || cell === undefined || String(cell).trim() === '')) continue
+      const row = {}
+      headers.forEach((header, index) => {
+        if (header) row[header] = cells[index] ?? ''
+      })
+      rows.push(row)
+    }
+    if (!rows.length) throw new Error(`A aba "${best.sheetName}" contém o cabeçalho, mas não possui linhas de dados.`)
     return rows
   })
 }
