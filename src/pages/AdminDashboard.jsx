@@ -213,7 +213,7 @@ export default function AdminDashboard({
         byRoot.get(root).push(d)
       })
       const updates = new Map(); const unresolved = []; const seenSourceRows = new Set(); let processedMonths = 0
-      const updates = new Map(); const unresolved = []; let processedMonths = 0
+      // Maps initialized above with source-row tracking.
       const parseGoal = (value) => {
         if (value === null || value === undefined || value === '') return null
         if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : NaN
