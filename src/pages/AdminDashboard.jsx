@@ -185,6 +185,7 @@ export default function AdminDashboard({
     } catch (err) {
       setUploadStatus('Erro na importação: ' + err.message)
     } finally {
+      e.target.value = ''
       setUploadingPag(false)
     }
   }
@@ -216,10 +217,11 @@ export default function AdminDashboard({
       })
       if (logError) throw logError
       setUploadStatus(`Sucesso! ${projetos.length} projetos únicos do funil importados de ${linhasBrutas} linhas; ${duplicateGroups} grupos duplicados consolidados; ${invalidCodes.length} projetos sem CNPJ válido ignorados; ${distsFile.length} raízes de CNPJ.`)
-      if (onDataRefresh) onDataRefresh()
+      if (onDataRefresh) await onDataRefresh()
     } catch (err) {
       setUploadStatus('Erro na importação: ' + err.message)
     } finally {
+      e.target.value = ''
       setUploadingCri(false)
     }
   }
