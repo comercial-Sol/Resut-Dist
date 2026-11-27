@@ -263,10 +263,12 @@ export default function AdminDashboard({
     finally { e.target.value = ''; setUploadingMetas(false) }
   }
   const downloadMetasTemplate = () => {
-    const csv = 'CNPJ_RAIZ,DISTRIBUIDOR,ANO,MES,META\n41649269,2M CONNECTIONS LTDA,2026,11,1000000.00\n'
-    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob); const link = document.createElement('a')
-    link.href = url; link.download = 'modelo_metas_canais.csv'; link.click(); URL.revokeObjectURL(url)
+    const headers = ['Distribuidor', 'CNPJ Dist', 'Codigo Dy', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+    const example = ['NOME DO CANAL', '00.000.000/0001-00', 'CODIGO_DY', ...Array(12).fill('')]
+    const sheet = XLSX.utils.aoa_to_sheet([headers, example])
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Metas 2026')
+    XLSX.writeFile(workbook, 'MODELO - METAS - 2026.xlsx')
   }
   const handleUploadPagFat = async (e) => {
     const file = e.target.files?.[0]
@@ -777,7 +779,7 @@ export default function AdminDashboard({
             <div className="border-2 border-dashed border-violet-300 rounded-xl p-6 text-center hover:border-violet-500 transition">
               <Upload className="w-10 h-10 text-violet-600 mx-auto mb-3" />
               <h3 className="font-bold text-slate-900">3. Metas Mensais dos Canais</h3>
-              <p className="text-xs text-slate-500 mt-1 mb-4">Importa metas por CNPJ raiz, ano e mês. Atualiza somente os meses enviados e preserva os demais.</p>
+              <p className="text-xs text-slate-500 mt-1 mb-4">Mesmo layout da planilha oficial: Distribuidor, CNPJ Dist, Codigo Dy e colunas Jan a Dez. O ano é identificado pelo nome do arquivo (ex.: METAS - 2026.xlsx).</p>
               <label className="inline-block px-4 py-2 bg-violet-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-violet-700">
                 {uploadingMetas ? 'Processando...' : 'Selecionar Planilha de Metas'}
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadMetas} disabled={uploadingMetas || uploadingPag || uploadingCri} className="hidden" />
