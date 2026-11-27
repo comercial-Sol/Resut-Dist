@@ -22,8 +22,8 @@ export default function AdminDashboard({
 }) {
   const [adminTab, setAdminTab] = useState('consolidado')
   const [previewDistCnpj, setPreviewDistCnpj] = useState(null)
-  const [anoRef, setAnoRef] = useState('2026')
-  const [mesRef, setMesRef] = useState('11')
+  const [anoRef, setAnoRef] = useState(String(new Date().getFullYear()))
+  const [mesRef, setMesRef] = useState(String(new Date().getMonth() + 1).padStart(2, '0'))
 
   // Upload states
   const [uploadingPag, setUploadingPag] = useState(false)
@@ -64,6 +64,15 @@ export default function AdminDashboard({
       }
     })
   }, [projetosPagFat])
+
+  const anosDisponiveis = useMemo(() => {
+    const years = new Set([String(new Date().getFullYear())])
+    projetosProcessados.forEach((p) => {
+      const year = p.data_faturamento?.slice(0, 4)
+      if (year && /^\d{4}$/.test(year)) years.add(year)
+    })
+    return [...years].sort((a, b) => Number(b) - Number(a))
+  }, [projetosProcessados])
 
   // Consolidação de métricas por distribuidor
   const resumoCanais = useMemo(() => {
@@ -304,9 +313,7 @@ export default function AdminDashboard({
             className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
           >
             <option value="TODOS">Total Geral (Todos os Anos)</option>
-            <option value="2025">Ano 2025</option>
-            <option value="2026">Ano 2026</option>
-            <option value="2027">Ano 2027</option>
+            {anosDisponiveis.map((ano) => <option key={ano} value={ano}>Ano {ano}</option>)}
           </select>
           <select
             value={mesRef}
