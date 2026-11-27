@@ -253,6 +253,7 @@ export async function parseQlikPagFatFile(file) {
   })
   return {
     ...result,
+    projetos: result.projects,
     distribuidores: distributorRows(rows),
     linhasBrutas: rows.length,
     projetosUnicos: result.projects.length,
@@ -293,6 +294,7 @@ export async function parseQlikCriadasFile(file) {
   })
   return {
     ...result,
+    projetos: result.projects,
     distribuidores: distributorRows(rows),
     linhasBrutas: rows.length,
     projetosUnicos: result.projects.length,
