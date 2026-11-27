@@ -161,6 +161,7 @@ export default function AdminDashboard({
     setUploadStatus('Lendo e deduplicando planilha de Projetos Pagos/Faturados do Qlik...')
     try {
       const { projetos, distribuidores: distsFile, linhasBrutas, invalidCodes, duplicateGroups } = await parseQlikPagFatFile(file)
+      if (!projetos.length) throw new Error(`Nenhum projeto válido foi identificado em ${linhasBrutas} linhas. Verifique código de venda e CNPJ do distribuidor.`)
       if (!isSupabaseConfigured || !supabase) {
         setUploadStatus(`Modo Demo: ${projetos.length} projetos únicos processados; ${duplicateGroups} grupos duplicados consolidados; ${invalidCodes.length} projetos sem CNPJ válido ignorados (de ${linhasBrutas} linhas). Configure o Supabase para gravar no banco.`)
         return
@@ -180,7 +181,7 @@ export default function AdminDashboard({
       })
       if (logError) throw logError
       setUploadStatus(`Sucesso! ${projetos.length} projetos únicos importados de ${linhasBrutas} linhas; ${duplicateGroups} grupos duplicados consolidados; ${invalidCodes.length} projetos sem CNPJ válido ignorados; ${distsFile.length} raízes de CNPJ.`)
-      if (onDataRefresh) onDataRefresh()
+      if (onDataRefresh) await onDataRefresh()
     } catch (err) {
       setUploadStatus('Erro na importação: ' + err.message)
     } finally {
@@ -195,6 +196,7 @@ export default function AdminDashboard({
     setUploadStatus('Lendo planilha de Projetos Criados (Funil) do Qlik...')
     try {
       const { projetos, distribuidores: distsFile, linhasBrutas, invalidCodes, duplicateGroups } = await parseQlikCriadasFile(file)
+      if (!projetos.length) throw new Error(`Nenhum projeto válido foi identificado em ${linhasBrutas} linhas. Verifique código de venda e CNPJ do distribuidor.`)
       if (!isSupabaseConfigured || !supabase) {
         setUploadStatus(`Modo Demo: ${projetos.length} projetos únicos processados; ${duplicateGroups} grupos duplicados consolidados; ${invalidCodes.length} projetos sem CNPJ válido ignorados (de ${linhasBrutas} linhas).`)
         return
