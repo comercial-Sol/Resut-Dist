@@ -11,6 +11,8 @@ import {
 import { parseQlikPagFatFile, parseQlikCriadasFile } from '../utils/qlikParser'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import DistributorDashboard from './DistributorDashboard'
+import PeriodFilter from '../components/PeriodFilter'
+import { inSelectedPeriod, rowMonth, getLatestSelectedMonth, countSelectedMonths, periodLabel } from '../utils/periodFilters'
 
 const MAX_IMPORT_FILE_BYTES = 50 * 1024 * 1024
 const validateImportFile = (file) => {
@@ -29,8 +31,14 @@ export default function AdminDashboard({
 }) {
   const [adminTab, setAdminTab] = useState('consolidado')
   const [previewDistCnpj, setPreviewDistCnpj] = useState(null)
-  const [anoRef, setAnoRef] = useState(String(new Date().getFullYear()))
-  const [mesRef, setMesRef] = useState(String(new Date().getMonth() + 1).padStart(2, '0'))
+  const now = new Date()
+  const currentYear = String(now.getFullYear())
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0')
+  const [selectedYears, setSelectedYears] = useState([currentYear])
+  const [selectedMonths, setSelectedMonths] = useState([currentMonth])
+  const [periodMode, setPeriodMode] = useState('current')
+  const [rankingSearch, setRankingSearch] = useState('')
+  const [rankingSort, setRankingSort] = useState('faturamento')
 
   // Upload states
   const [uploadingPag, setUploadingPag] = useState(false)
@@ -51,6 +59,7 @@ export default function AdminDashboard({
   const [solicitacaoSenha, setSolicitacaoSenha] = useState({})
   const [senhaAdmin, setSenhaAdmin] = useState({})
   const [processingRequest, setProcessingRequest] = useState('')
+  const [processingUser, setProcessingUser] = useState('')
 
 
   // Tratamento e Filtragem de Dados com as Regras Solicitadas
@@ -82,89 +91,75 @@ export default function AdminDashboard({
   }, [projetosPagFat])
 
   const anosDisponiveis = useMemo(() => {
-    const years = new Set([String(new Date().getFullYear())])
+    const years = new Set([currentYear])
     projetosProcessados.forEach((p) => {
-      const year = p.data_faturamento?.slice(0, 4)
-      if (year && /^\d{4}$/.test(year)) years.add(year)
+      const year = rowMonth(p, 'pag').slice(0, 4)
+      if (year) years.add(year)
+    })
+    projetosFunil.forEach((f) => {
+      const year = rowMonth(f, 'funil').slice(0, 4)
+      if (year) years.add(year)
     })
     return [...years].sort((a, b) => Number(b) - Number(a))
-  }, [projetosProcessados])
+  }, [projetosProcessados, projetosFunil, currentYear])
 
-  // Consolidação de métricas por distribuidor
+  const periodCaption = periodLabel(selectedYears, selectedMonths)
+  const latestSelected = getLatestSelectedMonth(selectedYears, selectedMonths)
+  const [latestYearText, latestMonthText] = latestSelected.split('-')
+  const anoCalculo = Number(latestYearText) || Number(currentYear)
+  const mesCalculo = Number(latestMonthText) || Number(currentMonth)
+  const selectedMonthCount = Math.max(1, countSelectedMonths(selectedYears, selectedMonths))
+
   const resumoCanais = useMemo(() => {
-    const mInt = parseInt(mesRef, 10)
-    const latestYear = projetosProcessados.reduce((max, p) => {
-      const year = Number(p.data_faturamento?.slice(0, 4)) || 0
-      return Math.max(max, year)
-    }, new Date().getFullYear())
-    const anoCalculo = anoRef === 'TODOS' ? latestYear : Number(anoRef)
-    const qStart = Math.floor((mInt - 1) / 3) * 3 + 1
-    const qMeses = [qStart, qStart + 1, qStart + 2].map((m) => `${anoCalculo}-${String(m).padStart(2, '0')}`)
-
     return distribuidores.map((dist) => {
-      const pags = projetosProcessados.filter((p) => p.cnpj_raiz === dist.cnpj_raiz && p.status_pagamento !== 'Cancelado')
-      const funis = projetosFunil.filter((f) => {
-        const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\D/g, '').substring(0, 8) : ''
+      const pagsHistorico = projetosProcessados.filter((p) =>
+        p.cnpj_raiz === dist.cnpj_raiz && p.status_pagamento !== 'Cancelado'
+      )
+      const pags = pagsHistorico.filter((p) => inSelectedPeriod(p, selectedYears, selectedMonths, 'pag'))
+      const funisHistorico = projetosFunil.filter((f) => {
+        const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\\D/g, '').substring(0, 8) : ''
         return fCnpj === dist.cnpj_raiz
       })
-
-  // Faturamento Ano (considera o filtro selecionado ou soma tudo se for 'TODOS')
-      const fatAno = pags
-        .filter((p) => {
-          const temValidacaoPagto = (p.numero_nf || p.status_pagamento === 'Pago');
-          if (anoRef === 'TODOS') return temValidacaoPagto;
-          return p.data_faturamento?.startsWith(anoRef) && temValidacaoPagto;
-        })
-        .reduce((acc, p) => acc + p.valor_total, 0)
-
-      // Faturamento Trimestre Atual
-      const fatTri = pags
-        .filter((p) => qMeses.some(m => p.data_faturamento?.startsWith(m)) && (p.numero_nf || p.status_pagamento === 'Pago'))
-        .reduce((acc, p) => acc + p.valor_total, 0)
-
-      const mediaTri = fatTri / 3
+      const funis = funisHistorico.filter((f) => inSelectedPeriod(f, selectedYears, selectedMonths, 'funil'))
+      const pagos = pags.filter((p) => Boolean(p.numero_nf) || p.status_pagamento === 'Pago')
+      const fatAno = pagos.reduce((acc, p) => acc + p.valor_total, 0)
+      const fatTri = fatAno
+      const mediaTri = fatAno / selectedMonthCount
       const tier = getRadisTier(mediaTri, dist.possui_equipe_3_pessoas)
-
-      // Apuração de comissão utilizando a comissão calculada (% comissao * valor produto com desconto)
-      const comissaoQlikTri = pags
-        .filter((p) => qMeses.some(m => p.data_faturamento?.startsWith(m)) && (p.numero_nf || p.status_pagamento === 'Pago'))
-        .reduce((acc, p) => acc + p.comissao_calculada, 0)
-      // Comissão RADIS é calculada pela faixa sobre faturamento do trimestre.
-      // Comissão percentual do Qlik permanece separada para não misturar conceitos.
-      const comissaoRadisTri = fatTri * tier.comissaoTotal
+      const comissaoQlikTri = pagos.reduce((acc, p) => acc + p.comissao_calculada, 0)
+      const comissaoRadisTri = fatAno * tier.comissaoTotal
 
       const revendas = buildRevendasConsolidado(
-        pags,
-        funis,
-        {},
-        anoCalculo,
-        mInt
+        pagsHistorico, funisHistorico, {}, anoCalculo, mesCalculo
       )
-
       const ativas = revendas.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
       const recorrentes = revendas.filter((r) => r.status === 'Recorrente').length
-
       const bonusAtivas = ativas >= tier.minAtivas ? 3500 : 0
       const bonusRecorrentes = recorrentes >= tier.minRecorrentes ? 3500 : 0
 
       return {
         ...dist,
-        fatAno,
-        fatTri,
-        mediaTri,
-        tier,
-        ativas,
-        recorrentes,
-        totalRevendas: revendas.length,
-        bonusAtivas,
-        bonusRecorrentes,
-        comissaoQlikTri,
-        comissaoRadisTri,
+        fatAno, fatTri, mediaTri, tier, ativas, recorrentes,
+        totalRevendas: revendas.length, bonusAtivas, bonusRecorrentes,
+        comissaoQlikTri, comissaoRadisTri,
         totalReceberTri: comissaoRadisTri + bonusAtivas + bonusRecorrentes,
         qtdPedidos: pags.length,
       }
-    }).sort((a, b) => b.fatAno - a.fatAno)
-  }, [distribuidores, projetosProcessados, projetosFunil, anoRef, mesRef])
+    })
+  }, [distribuidores, projetosProcessados, projetosFunil, selectedYears, selectedMonths, selectedMonthCount, anoCalculo, mesCalculo])
+
+  const resumoCanaisOrdenado = useMemo(() => {
+    const search = rankingSearch.trim().toLowerCase()
+    const rows = resumoCanais.filter((c) =>
+      !search || [c.nome, c.cnpj_raiz, c.cod_sap].some((value) => String(value || '').toLowerCase().includes(search))
+    )
+    return rows.sort((a, b) => {
+      if (rankingSort === 'comissao') return b.comissaoQlikTri - a.comissaoQlikTri
+      if (rankingSort === 'radis') return b.totalReceberTri - a.totalReceberTri
+      if (rankingSort === 'ativas') return b.ativas - a.ativas
+      return b.fatAno - a.fatAno
+    })
+  }, [resumoCanais, rankingSearch, rankingSort])
 
   const totaisGlobais = useMemo(() => {
     return resumoCanais.reduce(
@@ -433,25 +428,19 @@ export default function AdminDashboard({
           <h1 className="text-2xl font-extrabold mt-1">Consolidado de Canais & Distribuidores RADIS</h1>
           <p className="text-sm text-slate-300 mt-1">Visão unificada de faturamento, revendas ativas/recorrentes e apuração de bônus</p>
         </div>
-        <div className="flex items-center gap-3">
-      <select
-            value={anoRef}
-            onChange={(e) => setAnoRef(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
-          >
-            <option value="TODOS">Total Geral (Todos os Anos)</option>
-            {anosDisponiveis.map((ano) => <option key={ano} value={ano}>Ano {ano}</option>)}
-          </select>
-          <select
-            value={mesRef}
-            onChange={(e) => setMesRef(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold"
-          >
-            <option value="01">Jan</option><option value="02">Fev</option><option value="03">Mar</option>
-            <option value="04">Abr</option><option value="05">Mai</option><option value="06">Jun</option>
-            <option value="07">Jul</option><option value="08">Ago</option><option value="09">Set</option>
-            <option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3">
+          <PeriodFilter
+            yearsAvailable={anosDisponiveis}
+            selectedYears={selectedYears}
+            selectedMonths={selectedMonths}
+            periodMode={periodMode}
+            dark
+            onChange={({ selectedYears: years, selectedMonths: months, periodMode: mode }) => {
+              setSelectedYears(years)
+              setSelectedMonths(months)
+              setPeriodMode(mode)
+            }}
+          />
         </div>
       </div>
 
@@ -489,7 +478,7 @@ export default function AdminDashboard({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
-                <span>Faturamento Total {anoRef === 'TODOS' ? '(Geral)' : `(${anoRef})`}</span>
+                <span>Faturamento Total ({periodCaption})</span>
                 <DollarSign className="w-4 h-4 text-emerald-600" />
               </div>
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
@@ -498,7 +487,7 @@ export default function AdminDashboard({
             </div>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
-                <span>Faturamento Trimestre Atual</span>
+                <span>Faturamento no Período</span>
                 <Building2 className="w-4 h-4 text-blue-600" />
               </div>
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
@@ -516,7 +505,7 @@ export default function AdminDashboard({
             </div>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
-                <span>Comissão + Bônus RADIS (Tri)</span>
+                <span>Comissão + Bônus RADIS (Período)</span>
                 <ShieldCheck className="w-4 h-4 text-amber-600" />
               </div>
               <div className="text-2xl font-extrabold text-emerald-700 mt-2">
@@ -527,10 +516,10 @@ export default function AdminDashboard({
 
           {/* Gráfico Top 10 Distribuidores */}
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-            <h3 className="font-bold text-slate-900 mb-4">Top 10 Distribuidores por Faturamento ({anoRef})</h3>
+            <h3 className="font-bold text-slate-900 mb-4">Top 10 Distribuidores por Faturamento ({periodCaption})</h3>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={resumoCanais.slice(0, 10)} layout="vertical">
+                <BarChart data={resumoCanaisOrdenado.slice(0, 10)} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis type="number" tickFormatter={(v) => `R$ ${(v / 1000).toFixed(0)}k`} />
                   <YAxis type="category" dataKey="nome" width={180} tick={{ fontSize: 11 }} />
@@ -545,6 +534,11 @@ export default function AdminDashboard({
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-slate-200">
               <h3 className="font-bold text-slate-900">Desempenho Individual por Distribuidor (Consolidado Raiz CNPJ)</h3>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input value={rankingSearch} onChange={(e) => setRankingSearch(e.target.value)} placeholder="Buscar distribuidor, CNPJ ou SAP" className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                <select value={rankingSort} onChange={(e) => setRankingSort(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="faturamento">Maior faturamento</option><option value="radis">Maior total RADIS</option><option value="comissao">Maior comissão Qlik</option><option value="ativas">Mais revendas ativas</option></select>
+                <span className="text-xs text-slate-500">{resumoCanaisOrdenado.length} distribuidores</span>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
@@ -552,18 +546,18 @@ export default function AdminDashboard({
                   <tr>
                     <th className="px-4 py-3">Distribuidor (Raiz CNPJ)</th>
                     <th className="px-4 py-3">Faturamento Ano</th>
-                    <th className="px-4 py-3">Média Tri</th>
+                    <th className="px-4 py-3">Média Mensal</th>
                     <th className="px-4 py-3">Faixa / %</th>
                     <th className="px-4 py-3">Equipe 3P (+1%)</th>
                     <th className="px-4 py-3">Revendas Ativas</th>
                     <th className="px-4 py-3">Recorrentes</th>
-                    <th className="px-4 py-3">Comissão Qlik (Tri)</th>
+                    <th className="px-4 py-3">Comissão Qlik (Período)</th>
                     <th className="px-4 py-3">Total RADIS (Tri)</th>
                     <th className="px-4 py-3">Painel</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {resumoCanais.map((c) => (
+                  {resumoCanaisOrdenado.map((c) => (
                     <tr key={c.cnpj_raiz} className="hover:bg-slate-50">
                       <td className="px-4 py-3">
                         <div className="font-bold text-slate-900">{c.nome}</div>
