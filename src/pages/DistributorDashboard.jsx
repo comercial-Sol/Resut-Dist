@@ -160,7 +160,7 @@ export default function DistributorDashboard({
     .filter((f) => f.etapa_venda?.toLowerCase() === 'pré-orçamento')
     .reduce((acc, f) => acc + (Number(f.valor_total) || 0), 0)
   const carteiraNaoFaturada = projetosValidos
-    .filter((p) => !p.numero_nf && p.status_pagamento !== 'Pago')
+    .filter((p) => !p.numero_nf)
     .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
   const jaConvertidoMes = faturamentoPeriodo
   const possibilidadeConversao = preOrcamentoMes * 0.1
@@ -191,7 +191,7 @@ export default function DistributorDashboard({
       ].some((value) => String(value || '').toLowerCase().includes(search))
       const matchesStatus = statusPagFat === 'TODOS' ||
         (statusPagFat === 'FATURADO' ? Boolean(p.numero_nf) :
-          statusPagFat === 'CARTEIRA' ? !p.numero_nf && p.status_pagamento !== 'Pago' :
+          statusPagFat === 'CARTEIRA' ? !p.numero_nf :
             String(p.status_pagamento || '').toUpperCase() === statusPagFat)
       return matchesText && matchesStatus
     })
