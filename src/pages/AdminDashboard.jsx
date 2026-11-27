@@ -120,7 +120,6 @@ export default function AdminDashboard({
         const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\\D/g, '').substring(0, 8) : ''
         return fCnpj === dist.cnpj_raiz
       })
-      const funis = funisHistorico.filter((f) => inSelectedPeriod(f, selectedYears, selectedMonths, 'funil'))
       const pagos = pags.filter((p) => Boolean(p.numero_nf) || p.status_pagamento === 'Pago')
       const fatAno = pagos.reduce((acc, p) => acc + p.valor_total, 0)
       const fatTri = fatAno
@@ -429,7 +428,7 @@ export default function AdminDashboard({
       .from('distribuidores')
       .update({ possui_equipe_3_pessoas: !dist.possui_equipe_3_pessoas })
       .eq('grupo_economico_id', groupId)
-    if (error) { setSolicitacaoStatus('Não foi possível atualizar o bônus da equipe: ' + error.message); return }
+    if (error) { alert('Não foi possível atualizar o bônus da equipe: ' + error.message); return }
     if (onDataRefresh) await onDataRefresh()
   }
 
@@ -553,6 +552,7 @@ export default function AdminDashboard({
               <div className="text-2xl font-extrabold text-slate-900 mt-2">
                 {totaisGlobais.revendasAtivas} <span className="text-sm font-normal text-slate-500">ativas</span> / {totaisGlobais.revendasRecorrentes} <span className="text-sm font-normal text-emerald-600">rec.</span>
               </div>
+              <p className="mt-1 text-[11px] text-slate-400">Status da carteira avaliado até o último mês do período selecionado</p>
             </div>
             <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between text-slate-500 text-xs font-bold uppercase">
@@ -765,7 +765,7 @@ export default function AdminDashboard({
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th><th className="px-4 py-3">Ações de senha</th></tr></thead>
                 <tbody className="divide-y divide-slate-200">
-                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3 min-w-[260px]"><div className="flex flex-col items-start gap-2"><button onClick={()=>handleSendPasswordReset(u.email)} className="rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">Enviar link para redefinir senha</button><button onClick={()=>handleConfirmAccountEmail(u.email)} className="rounded border border-blue-300 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">Confirmar e-mail da conta</button><label className="mt-1 text-xs font-semibold text-slate-700">Definir senha manualmente</label><input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Digite senha temporária (12+)" value={senhaAdmin[u.email] || ''} onChange={e=>setSenhaAdmin(v=>({...v,[u.email]:e.target.value}))} className="w-full rounded border border-slate-300 px-2 py-2 text-xs" /><button onClick={()=>handleSetAccountPassword(u.email)} className="rounded bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700">Definir senha e confirmar e-mail</button><button disabled={processingUser===u.email || String(userEmail).toLowerCase()===String(u.email).toLowerCase()} onClick={()=>handleDeleteUser(u.email)} className="rounded border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40">{processingUser===u.email?'Excluindo...':'Excluir conta e e-mail'}</button></div></td></tr>})}
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3 min-w-[260px]"><div className="flex flex-col items-start gap-2"><button onClick={()=>handleSendPasswordReset(u.email)} className="rounded border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">Enviar link para redefinir senha</button><button onClick={()=>handleConfirmAccountEmail(u.email)} className="rounded border border-blue-300 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">Confirmar e-mail da conta</button><label className="mt-1 text-xs font-semibold text-slate-700">Definir senha manualmente</label><input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Digite senha temporária (12+)" value={senhaAdmin[u.email] || ''} onChange={e=>setSenhaAdmin(v=>({...v,[u.email]:e.target.value}))} className="w-full rounded border border-slate-300 px-2 py-2 text-xs" /><button onClick={()=>handleSetAccountPassword(u.email)} className="rounded bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700">Definir senha e confirmar e-mail</button><button disabled={processingUser===u.email || String(userEmail).toLowerCase()===String(u.email).toLowerCase()} onClick={()=>handleDeleteUser(u.email)} className="rounded border border-rose-300 px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40">{processingUser===u.email?'Excluindo...':'Excluir conta do portal'}</button></div></td></tr>})}
                 </tbody>
               </table>
             </div>
