@@ -205,6 +205,14 @@ export default function AdminDashboard({
       const year = yearMatch?.[0]
       if (!year) throw new Error('O nome do arquivo precisa conter o ano da meta, por exemplo: METAS - 2026.xlsx.')
       const byCode = new Map(distribuidores.filter((d) => d.cod_sap).map((d) => [String(d.cod_sap).trim(), d]))
+      const byRoot = new Map()
+      distribuidores.forEach((d) => {
+        const root = String(d.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8)
+        if (!root) return
+        if (!byRoot.has(root)) byRoot.set(root, [])
+        byRoot.get(root).push(d)
+      })
+      const updates = new Map(); const unresolved = []; const seenSourceRows = new Set(); let processedMonths = 0
       const updates = new Map(); const unresolved = []; let processedMonths = 0
       const parseGoal = (value) => {
         if (value === null || value === undefined || value === '') return null
@@ -217,18 +225,28 @@ export default function AdminDashboard({
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i]
         const code = String(get(row, ['codigody','coddy','codsap','codigo'])).trim().replace(/\.0$/, '')
-        const distributor = byCode.get(code)
         const branchCnpj = String(get(row, ['cnpjdist','cnpj','cnpjdistribuidor'])).replace(/\D/g, '')
-        const name = String(get(row, ['distribuidor','canal','nomedistribuidor']) || 'Linha ' + (i + 2)).trim()
-        if (!code || !distributor) { unresolved.push(name + ' (código DY ' + (code || 'ausente') + ')'); continue }
         const branchRoot = branchCnpj.slice(0, 8)
-        const assignedRoot = String(distributor.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8)
-        if (branchRoot && branchRoot !== assignedRoot) {
-          const branch = distribuidores.find((d) => String(d.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8) === branchRoot)
-          if (!branch || !distributor.grupo_economico_id || branch.grupo_economico_id !== distributor.grupo_economico_id) { unresolved.push(name + ' (CNPJ e código DY não correspondem ao mesmo canal/grupo)'); continue }
-        }
-        const root = assignedRoot
+        const name = String(get(row, ['distribuidor','canal','nomedistribuidor']) || 'Linha ' + (i + 2)).trim()
+        const codeMatch = code ? byCode.get(code) : null
+        let distributor = codeMatch
+        if (codeMatch && branchRoot) {
+          const assignedRoot = String(codeMatch.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8)
+          if (branchRoot !== assignedRoot) {
+            const branchMatches = byRoot.get(branchRoot) || []
+            const sameGroup = branchMatches.some((d) => d.grupo_economico_id && d.grupo_economico_id === codeMatch.grupo_economico_id)
+            if (!sameGroup) { unresolved.push(name + ' (CNPJ ' + branchRoot + ' diverge do cadastro do Código DY ' + code + ')'); continue }
+          }
+        } else if (!codeMatch && branchRoot) {
+          const candidates = byRoot.get(branchRoot) || []
+          if (candidates.length === 1) distributor = candidates[0]
+          else { unresolved.push(name + ' (Código DY ' + (code || 'ausente') + ' não cadastrado e CNPJ sem vínculo único)'); continue }
+        } else { unresolved.push(name + ' (Código DY ' + (code || 'ausente') + ' não cadastrado)'); continue }
+        const root = String(distributor.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8)
         if (!root) { unresolved.push(name + ' (canal sem CNPJ raiz no cadastro)'); continue }
+        const sourceKey = root + '|' + (code || 'linha-' + (i + 2))
+        if (seenSourceRows.has(sourceKey)) throw new Error('Código DY repetido para o mesmo canal na planilha: ' + (code || name) + '.')
+        seenSourceRows.add(sourceKey)
         const monthly = {}
         for (let m = 0; m < 12; m++) {
           const raw = get(row, monthCols[m])
@@ -240,8 +258,9 @@ export default function AdminDashboard({
         if (!updates.has(root)) updates.set(root, {})
         const target = updates.get(root)
         for (const [period, amount] of Object.entries(monthly)) {
-          if (Object.prototype.hasOwnProperty.call(target, period) && target[period] !== amount) throw new Error('Há duas metas diferentes para o mesmo canal e mês: ' + name + ', ' + period + '.')
-          target[period] = amount; processedMonths++
+          // Vários códigos DY/filiais do mesmo CNPJ-raiz compõem a meta total do canal.
+          target[period] = (target[period] || 0) + amount
+          processedMonths++
         }
       }
       if (!updates.size) throw new Error('Nenhuma linha da planilha pôde ser vinculada ao cadastro de canais pelo Código DY.')
