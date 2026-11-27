@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react'
+import * as XLSX from 'xlsx'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
@@ -43,6 +44,7 @@ export default function AdminDashboard({
   // Upload states
   const [uploadingPag, setUploadingPag] = useState(false)
   const [uploadingCri, setUploadingCri] = useState(false)
+  const [uploadingMetas, setUploadingMetas] = useState(false)
   const [uploadStatus, setUploadStatus] = useState('')
 
   // Novo usuário state
@@ -183,6 +185,78 @@ export default function AdminDashboard({
     )
   }, [resumoCanais])
 
+  const handleUploadMetas = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try { validateImportFile(file) } catch (err) { setUploadStatus(err.message); e.target.value = ''; return }
+    setUploadingMetas(true)
+    setUploadStatus('Validando planilha de metas dos canais...')
+    try {
+      if (!isSupabaseConfigured || !supabase) throw new Error('Supabase não está configurado. Não é possível gravar as metas.')
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
+      if (!workbook.SheetNames.length) throw new Error('A planilha não possui abas.')
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: '', raw: false })
+      if (!rows.length) throw new Error('A planilha está vazia.')
+      const normalize = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const findValue = (row, aliases) => { const k = Object.keys(row).find((key) => aliases.includes(normalize(key))); return k ? row[k] : '' }
+      const monthNumber = (v) => {
+        const raw = normalize(v); const n = Number(raw)
+        if (n >= 1 && n <= 12) return String(n).padStart(2, '0')
+        const names = ['janeiro','fevereiro','marco','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro']
+        const idx = names.indexOf(raw); if (idx >= 0) return String(idx + 1).padStart(2, '0')
+        const short = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']; const si = short.indexOf(raw.slice(0, 3))
+        return si >= 0 ? String(si + 1).padStart(2, '0') : ''
+      }
+      const parseAmount = (v) => {
+        if (typeof v === 'number') return v
+        let raw = String(v || '').trim().replace(/R\$/gi, '').replace(/\s/g, '')
+        if (raw.includes(',')) raw = raw.replace(/\./g, '').replace(',', '.')
+        const amount = Number(raw); return Number.isFinite(amount) ? amount : NaN
+      }
+      const knownRoots = new Map(distribuidores.map((d) => [String(d.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8), d]))
+      const parsed = []; const errors = []
+      rows.forEach((row, index) => {
+        const rawRoot = findValue(row, ['cnpjraiz','cnpj','raizcnpj'])
+        const root = String(rawRoot || '').replace(/\D/g, '').slice(0, 8)
+        const year = String(findValue(row, ['ano','year']) || '').trim().slice(0, 4)
+        const rawMonth = findValue(row, ['mes','month','mesreferencia','competencia'])
+        const combined = String(rawMonth || '').match(/(20\d{2})[-/](\d{1,2})/)
+        const finalYear = combined ? combined[1] : year
+        const month = monthNumber(combined ? combined[2] : rawMonth)
+        const amount = parseAmount(findValue(row, ['meta','valormeta','metamensal','valormetamensal']))
+        if (!root || root.length !== 8 || !knownRoots.has(root)) errors.push('Linha ' + (index + 2) + ': CNPJ raiz ausente ou não cadastrado.')
+        else if (!/^20\d{2}$/.test(finalYear) || !month) errors.push('Linha ' + (index + 2) + ': mês/ano inválido.')
+        else if (!Number.isFinite(amount) || amount < 0) errors.push('Linha ' + (index + 2) + ': valor de meta inválido.')
+        else parsed.push({ root, ym: finalYear + '-' + month, amount })
+      })
+      if (errors.length) throw new Error(errors.slice(0, 8).join(' ') + (errors.length > 8 ? ' E mais ' + (errors.length - 8) + ' erro(s).' : ''))
+      if (!parsed.length) throw new Error('Nenhuma meta válida foi encontrada.')
+      const seen = new Set()
+      for (const item of parsed) { const key = item.root + '|' + item.ym; if (seen.has(key)) throw new Error('Há metas duplicadas para o mesmo canal e mês: ' + key); seen.add(key) }
+      const roots = [...new Set(parsed.map((item) => item.root))]
+      const { data: currentRows, error: readError } = await supabase.from('distribuidores').select('cnpj_raiz,metas_mensais').in('cnpj_raiz', roots)
+      if (readError) throw readError
+      const currentByRoot = new Map((currentRows || []).map((d) => [String(d.cnpj_raiz), d.metas_mensais || {}]))
+      for (const root of roots) {
+        const merged = { ...(currentByRoot.get(root) || {}) }
+        parsed.filter((item) => item.root === root).forEach((item) => { merged[item.ym] = item.amount })
+        const { error } = await supabase.from('distribuidores').update({ metas_mensais: merged }).eq('cnpj_raiz', root)
+        if (error) throw error
+      }
+      const { error: logError } = await supabase.from('importacoes_log').insert({ tipo_base: 'METAS', arquivo_nome: file.name, total_registros: parsed.length, importado_por: userEmail })
+      if (logError) throw logError
+      setUploadStatus('Sucesso! ' + parsed.length + ' metas atualizadas para ' + roots.length + ' canais. Os meses não presentes no arquivo foram preservados.')
+      if (onDataRefresh) await onDataRefresh()
+    } catch (err) { setUploadStatus('Erro na importação das metas: ' + err.message) }
+    finally { e.target.value = ''; setUploadingMetas(false) }
+  }
+
+  const downloadMetasTemplate = () => {
+    const csv = 'CNPJ_RAIZ,DISTRIBUIDOR,ANO,MES,META\n41649269,2M CONNECTIONS LTDA,2026,11,1000000.00\n'
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob); const link = document.createElement('a')
+    link.href = url; link.download = 'modelo_metas_canais.csv'; link.click(); URL.revokeObjectURL(url)
+  }
   const handleUploadPagFat = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -666,7 +740,7 @@ export default function AdminDashboard({
               O importador remove automaticamente linhas duplicadas de múltiplos componentes/pagamentos e extrai a raiz do CNPJ (8 dígitos).
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-emerald-500 transition">
               <Upload className="w-10 h-10 text-emerald-600 mx-auto mb-3" />
               <h3 className="font-bold text-slate-900">1. Planilha de Projetos Pagos / Faturados</h3>
@@ -688,6 +762,16 @@ export default function AdminDashboard({
                 {uploadingCri ? 'Processando...' : 'Selecionar Arquivo Criadas (.xlsx)'}
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadCriadas} disabled={uploadingCri} className="hidden" />
               </label>
+            </div>
+            <div className="border-2 border-dashed border-violet-300 rounded-xl p-6 text-center hover:border-violet-500 transition">
+              <Upload className="w-10 h-10 text-violet-600 mx-auto mb-3" />
+              <h3 className="font-bold text-slate-900">3. Metas Mensais dos Canais</h3>
+              <p className="text-xs text-slate-500 mt-1 mb-4">Importa metas por CNPJ raiz, ano e mês. Atualiza somente os meses enviados e preserva os demais.</p>
+              <label className="inline-block px-4 py-2 bg-violet-600 text-white text-sm font-semibold rounded-lg cursor-pointer hover:bg-violet-700">
+                {uploadingMetas ? 'Processando...' : 'Selecionar Planilha de Metas'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadMetas} disabled={uploadingMetas || uploadingPag || uploadingCri} className="hidden" />
+              </label>
+              <button type="button" onClick={downloadMetasTemplate} className="block mx-auto mt-3 text-xs font-semibold text-violet-700 underline">Baixar modelo de preenchimento</button>
             </div>
           </div>
           {uploadStatus && (
