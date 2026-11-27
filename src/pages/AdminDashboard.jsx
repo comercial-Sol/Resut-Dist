@@ -303,6 +303,19 @@ export default function AdminDashboard({
     }
   }
 
+  const handleConfirmAccountEmail = async (email) => {
+    setSolicitacaoStatus('')
+    const { data, error } = await supabase.functions.invoke('approve-access-request', { body: { action: 'confirm_email', email } })
+    if (error) {
+      let detail = error.message || 'Falha ao confirmar o e-mail.'
+      try { const payload = await error.context?.json?.(); if (payload?.error) detail = payload.error } catch {}
+      setSolicitacaoStatus('Não foi possível confirmar ' + email + ': ' + detail)
+      return
+    }
+    if (!data?.ok) { setSolicitacaoStatus(data?.error || 'O servidor não confirmou a conta.'); return }
+    setSolicitacaoStatus('E-mail confirmado para ' + email + '. A conta já pode tentar entrar com a senha definida.')
+  }
+
   const handleSendPasswordReset = async (email) => {
     setSolicitacaoStatus('')
     const redirectTo = window.location.origin + window.location.pathname
@@ -679,7 +692,7 @@ export default function AdminDashboard({
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th><th className="px-4 py-3">Ações de senha</th></tr></thead>
                 <tbody className="divide-y divide-slate-200">
-                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3"><button onClick={()=>handleSendPasswordReset(u.email)} className="text-xs font-semibold text-emerald-700 hover:underline">Enviar link para redefinir senha</button></td></tr>})}
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3"><button onClick={()=>handleSendPasswordReset(u.email)} className="text-xs font-semibold text-emerald-700 hover:underline">Enviar link para redefinir senha</button><div className="mt-2"><button onClick={()=>handleConfirmAccountEmail(u.email)} className="text-xs font-semibold text-blue-700 hover:underline">Confirmar e-mail da conta</button></div></td></tr>})}
                 </tbody>
               </table>
             </div>
