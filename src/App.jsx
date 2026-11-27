@@ -176,9 +176,10 @@ export default function App() {
     setAuthNotice('')
     const targetEmail = email.trim().toLowerCase()
     if (!targetEmail) { setAuthError('Informe o e-mail da conta para receber o link.'); return }
-    const redirectTo = window.location.origin + window.location.pathname
+    const redirectTo = 'https://comercial-sol.github.io/Resut-Dist/'
     const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, { redirectTo })
-    if (error) setAuthError('Não foi possível enviar o e-mail de recuperação: ' + error.message)
+    if (error?.status === 429 || error?.code === 'over_email_send_rate_limit') setAuthError('O serviço de e-mail atingiu o limite temporário de envios. Aguarde a liberação ou solicite ao administrador uma senha temporária pelo painel.')
+    else if (error) setAuthError('Não foi possível enviar o e-mail de recuperação: ' + error.message)
     else setAuthNotice('Se o endereço estiver cadastrado, você receberá um e-mail com o link para redefinir a senha.')
   }
 
