@@ -15,11 +15,16 @@ import DistributorDashboard from './DistributorDashboard'
 import PeriodFilter from '../components/PeriodFilter'
 import { inSelectedPeriod, rowMonth, getLatestSelectedMonth, countSelectedMonths, periodLabel } from '../utils/periodFilters'
 
-const MAX_IMPORT_FILE_BYTES = 50 * 1024 * 1024
+// O Qlik pode gerar bases grandes. Mantemos uma proteção contra arquivos
+// excessivos, mas ampliamos o limite para 200 MB. O parser ainda trabalha
+// em memória no navegador; para volumes maiores será necessário processamento
+// no servidor em lotes/streaming.
+const MAX_IMPORT_FILE_BYTES = 200 * 1024 * 1024
 const validateImportFile = (file) => {
   const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'))
   if (!['.xlsx', '.xls', '.csv'].includes(extension)) throw new Error('Formato inválido. Envie somente arquivos XLSX, XLS ou CSV.')
-  if (!file.size || file.size > MAX_IMPORT_FILE_BYTES) throw new Error('O arquivo está vazio ou excede o limite de 50 MB.')
+  if (!file.size) throw new Error('O arquivo está vazio.')
+  if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error('O arquivo excede o limite atual de 200 MB. Para bases maiores, precisamos processar a planilha no servidor em lotes.')
 }
 
 export default function AdminDashboard({
