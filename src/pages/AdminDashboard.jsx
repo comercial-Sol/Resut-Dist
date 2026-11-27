@@ -190,67 +190,78 @@ export default function AdminDashboard({
     if (!file) return
     try { validateImportFile(file) } catch (err) { setUploadStatus(err.message); e.target.value = ''; return }
     setUploadingMetas(true)
-    setUploadStatus('Validando planilha de metas dos canais...')
+    setUploadStatus('Lendo metas dos canais...')
     try {
-      if (!isSupabaseConfigured || !supabase) throw new Error('Supabase não está configurado. Não é possível gravar as metas.')
+      if (!isSupabaseConfigured || !supabase) throw new Error('Supabase não está configurado.')
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true })
-      if (!workbook.SheetNames.length) throw new Error('A planilha não possui abas.')
-      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: '', raw: false })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      if (!sheet) throw new Error('A planilha não possui uma aba válida.')
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: true })
       if (!rows.length) throw new Error('A planilha está vazia.')
-      const normalize = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
-      const findValue = (row, aliases) => { const k = Object.keys(row).find((key) => aliases.includes(normalize(key))); return k ? row[k] : '' }
-      const monthNumber = (v) => {
-        const raw = normalize(v); const n = Number(raw)
-        if (n >= 1 && n <= 12) return String(n).padStart(2, '0')
-        const names = ['janeiro','fevereiro','marco','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro']
-        const idx = names.indexOf(raw); if (idx >= 0) return String(idx + 1).padStart(2, '0')
-        const short = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez']; const si = short.indexOf(raw.slice(0, 3))
-        return si >= 0 ? String(si + 1).padStart(2, '0') : ''
-      }
-      const parseAmount = (v) => {
-        if (typeof v === 'number') return v
-        let raw = String(v || '').trim().replace(/R\$/gi, '').replace(/\s/g, '')
+      const normalize = (v) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const get = (row, names) => { const k = Object.keys(row).find((key) => names.includes(normalize(key))); return k ? row[k] : '' }
+      const monthCols = [['jan','janeiro'],['fev','fevereiro'],['mar','marco'],['abr','abril'],['mai','maio'],['jun','junho'],['jul','julho'],['ago','agosto'],['set','setembro'],['out','outubro'],['nov','novembro'],['dez','dezembro']]
+      const yearMatch = file.name.match(/20\d{2}/)
+      const year = yearMatch?.[0]
+      if (!year) throw new Error('O nome do arquivo precisa conter o ano da meta, por exemplo: METAS - 2026.xlsx.')
+      const byCode = new Map(distribuidores.filter((d) => d.cod_sap).map((d) => [String(d.cod_sap).trim(), d]))
+      const updates = new Map(); const unresolved = []; let processedMonths = 0
+      const parseGoal = (value) => {
+        if (value === null || value === undefined || value === '') return null
+        if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : NaN
+        let raw = String(value).trim().replace(/R\$/gi, '').replace(/\s/g, '')
+        if (raw === '-' || raw === '0-') return 0
         if (raw.includes(',')) raw = raw.replace(/\./g, '').replace(',', '.')
-        const amount = Number(raw); return Number.isFinite(amount) ? amount : NaN
+        const n = Number(raw); return Number.isFinite(n) && n >= 0 ? n : NaN
       }
-      const knownRoots = new Map(distribuidores.map((d) => [String(d.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8), d]))
-      const parsed = []; const errors = []
-      rows.forEach((row, index) => {
-        const rawRoot = findValue(row, ['cnpjraiz','cnpj','raizcnpj'])
-        const root = String(rawRoot || '').replace(/\D/g, '').slice(0, 8)
-        const year = String(findValue(row, ['ano','year']) || '').trim().slice(0, 4)
-        const rawMonth = findValue(row, ['mes','month','mesreferencia','competencia'])
-        const combined = String(rawMonth || '').match(/(20\d{2})[-/](\d{1,2})/)
-        const finalYear = combined ? combined[1] : year
-        const month = monthNumber(combined ? combined[2] : rawMonth)
-        const amount = parseAmount(findValue(row, ['meta','valormeta','metamensal','valormetamensal']))
-        if (!root || root.length !== 8 || !knownRoots.has(root)) errors.push('Linha ' + (index + 2) + ': CNPJ raiz ausente ou não cadastrado.')
-        else if (!/^20\d{2}$/.test(finalYear) || !month) errors.push('Linha ' + (index + 2) + ': mês/ano inválido.')
-        else if (!Number.isFinite(amount) || amount < 0) errors.push('Linha ' + (index + 2) + ': valor de meta inválido.')
-        else parsed.push({ root, ym: finalYear + '-' + month, amount })
-      })
-      if (errors.length) throw new Error(errors.slice(0, 8).join(' ') + (errors.length > 8 ? ' E mais ' + (errors.length - 8) + ' erro(s).' : ''))
-      if (!parsed.length) throw new Error('Nenhuma meta válida foi encontrada.')
-      const seen = new Set()
-      for (const item of parsed) { const key = item.root + '|' + item.ym; if (seen.has(key)) throw new Error('Há metas duplicadas para o mesmo canal e mês: ' + key); seen.add(key) }
-      const roots = [...new Set(parsed.map((item) => item.root))]
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
+        const code = String(get(row, ['codigody','coddy','codsap','codigo'])).trim().replace(/\.0$/, '')
+        const distributor = byCode.get(code)
+        const branchCnpj = String(get(row, ['cnpjdist','cnpj','cnpjdistribuidor'])).replace(/\D/g, '')
+        const name = String(get(row, ['distribuidor','canal','nomedistribuidor']) || 'Linha ' + (i + 2)).trim()
+        if (!code || !distributor) { unresolved.push(name + ' (código DY ' + (code || 'ausente') + ')'); continue }
+        const branchRoot = branchCnpj.slice(0, 8)
+        const assignedRoot = String(distributor.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8)
+        if (branchRoot && branchRoot !== assignedRoot) {
+          const branch = distribuidores.find((d) => String(d.cnpj_raiz || '').replace(/\D/g, '').slice(0, 8) === branchRoot)
+          if (!branch || !distributor.grupo_economico_id || branch.grupo_economico_id !== distributor.grupo_economico_id) { unresolved.push(name + ' (CNPJ e código DY não correspondem ao mesmo canal/grupo)'); continue }
+        }
+        const root = assignedRoot
+        if (!root) { unresolved.push(name + ' (canal sem CNPJ raiz no cadastro)'); continue }
+        const monthly = {}
+        for (let m = 0; m < 12; m++) {
+          const raw = get(row, monthCols[m])
+          const amount = parseGoal(raw)
+          if (Number.isNaN(amount)) throw new Error('Valor inválido na linha ' + (i + 2) + ', mês ' + monthCols[m][0].toUpperCase() + '.')
+          if (amount !== null) monthly[year + '-' + String(m + 1).padStart(2, '0')] = amount
+        }
+        if (!Object.keys(monthly).length) continue
+        if (!updates.has(root)) updates.set(root, {})
+        const target = updates.get(root)
+        for (const [period, amount] of Object.entries(monthly)) {
+          if (Object.prototype.hasOwnProperty.call(target, period) && target[period] !== amount) throw new Error('Há duas metas diferentes para o mesmo canal e mês: ' + name + ', ' + period + '.')
+          target[period] = amount; processedMonths++
+        }
+      }
+      if (!updates.size) throw new Error('Nenhuma linha da planilha pôde ser vinculada ao cadastro de canais pelo Código DY.')
+      const roots = [...updates.keys()]
       const { data: currentRows, error: readError } = await supabase.from('distribuidores').select('cnpj_raiz,metas_mensais').in('cnpj_raiz', roots)
       if (readError) throw readError
       const currentByRoot = new Map((currentRows || []).map((d) => [String(d.cnpj_raiz), d.metas_mensais || {}]))
       for (const root of roots) {
-        const merged = { ...(currentByRoot.get(root) || {}) }
-        parsed.filter((item) => item.root === root).forEach((item) => { merged[item.ym] = item.amount })
+        const merged = { ...(currentByRoot.get(root) || {}), ...updates.get(root) }
         const { error } = await supabase.from('distribuidores').update({ metas_mensais: merged }).eq('cnpj_raiz', root)
         if (error) throw error
       }
-      const { error: logError } = await supabase.from('importacoes_log').insert({ tipo_base: 'METAS', arquivo_nome: file.name, total_registros: parsed.length, importado_por: userEmail })
+      const { error: logError } = await supabase.from('importacoes_log').insert({ tipo_base: 'METAS', arquivo_nome: file.name, total_registros: processedMonths, importado_por: userEmail })
       if (logError) throw logError
-      setUploadStatus('Sucesso! ' + parsed.length + ' metas atualizadas para ' + roots.length + ' canais. Os meses não presentes no arquivo foram preservados.')
+      const warning = unresolved.length ? ' Não vinculadas (' + unresolved.length + '): ' + unresolved.slice(0, 8).join('; ') + (unresolved.length > 8 ? '; ...' : '') + '.' : ''
+      setUploadStatus('Sucesso! ' + processedMonths + ' metas mensais gravadas para ' + roots.length + ' canais, ano ' + year + '. Metas de outros meses foram preservadas.' + warning)
       if (onDataRefresh) await onDataRefresh()
     } catch (err) { setUploadStatus('Erro na importação das metas: ' + err.message) }
     finally { e.target.value = ''; setUploadingMetas(false) }
   }
-
   const downloadMetasTemplate = () => {
     const csv = 'CNPJ_RAIZ,DISTRIBUIDOR,ANO,MES,META\n41649269,2M CONNECTIONS LTDA,2026,11,1000000.00\n'
     const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' })
