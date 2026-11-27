@@ -74,9 +74,9 @@ const first = (...values) => values.find((value) => {
 
 function normalizeHeader(value) {
   return String(value ?? '')
-    .replace(/^\\uFEFF/, '')
+    .replace(/^\uFEFF/, '')
     .normalize('NFD')
-    .replace(/[\\u0300-\\u036f]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '')
 }
@@ -116,7 +116,7 @@ function readRows(file, requiredColumns = []) {
     }
 
     const headers = best.headerRow.map((header) => {
-      const raw = String(header ?? '').replace(/^\\uFEFF/, '').trim()
+      const raw = String(header ?? '').replace(/^\uFEFF/, '').trim()
       return requiredByNormalized.get(normalizeHeader(raw)) || raw
     })
     const rows = []
