@@ -48,4 +48,8 @@ A importação consolida linhas repetidas por `Código Venda Projeto Solar`, pre
 - `supabase/schema.sql`: SQL consolidado do banco e políticas de acesso.
 - `supabase/seed_distribuidores.sql`: cadastro inicial de distribuidores, incluindo as 17 raízes encontradas somente na base Criadas.
 
-O app não usa dados demo quando o Supabase está configurado: se o carregamento real falhar, apresenta erro em vez de exibir números de demonstração.
+O app não usa dados demo quando o Supabase está configurado: se o carregamento real falhar, apresenta erro em vez de exibir números de demonstração. Em produção, se a configuração do Supabase estiver ausente, o portal falha fechado e não oferece modo Preview.
+
+## Segurança
+
+Consulte `SECURITY.md` para os controles implementados e as configurações ainda necessárias no painel. O vínculo entre raízes CNPJ é explícito e mantido em `private.distribuidor_cnpj_links`; nunca associe distribuidores somente porque os nomes são parecidos.
