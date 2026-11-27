@@ -277,11 +277,23 @@ export default function AdminDashboard({
           tempPassword: solicitacaoSenha[request.id] || '',
         },
       })
-      if (error) throw error
-      if (data?.error) throw new Error(data.error)
-      setSolicitacaoStatus(data?.invitationSent
-        ? 'Acesso aprovado e convite enviado para ' + request.email
-        : 'Acesso aprovado e vínculo atualizado para ' + request.email)
+      if (error) {
+        let detail = error.message || 'Falha ao chamar o serviço de aprovação.'
+        try {
+          if (error.context && typeof error.context.json === 'function') {
+            const payload = await error.context.json()
+            if (payload?.error) detail = payload.error + (payload.code ? ' (' + payload.code + ')' : '')
+          }
+        } catch {}
+        throw new Error(detail)
+      }
+      if (data?.error || data?.ok === false) throw new Error(data.error || 'O servidor não confirmou a aprovação.')
+      const resultMessage = data?.invitationSent
+        ? 'Acesso aprovado. Convite enviado para ' + request.email
+        : data?.resetEmailSent
+          ? 'Acesso aprovado. Link de definição de senha enviado para ' + request.email
+          : 'Acesso aprovado e vínculo atualizado para ' + request.email
+      setSolicitacaoStatus(resultMessage)
       await loadSolicitacoes()
       if (onDataRefresh) await onDataRefresh()
     } catch (err) {
