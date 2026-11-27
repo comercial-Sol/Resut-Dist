@@ -43,6 +43,15 @@ export default function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
+  const [authMode, setAuthMode] = useState('login')
+  const [recoveryPassword, setRecoveryPassword] = useState('')
+  const [requestName, setRequestName] = useState('')
+  const [requestEmail, setRequestEmail] = useState('')
+  const [requestCompany, setRequestCompany] = useState('')
+  const [requestCnpj, setRequestCnpj] = useState('')
+  const [requestPhone, setRequestPhone] = useState('')
+  const [requestMessage, setRequestMessage] = useState('')
+  const [authNotice, setAuthNotice] = useState('')
 
   // Dados carregados
   const [distribuidores, setDistribuidores] = useState(DEMO_DISTRIBUIDORES)
@@ -67,7 +76,8 @@ export default function App() {
       else setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setAuthMode('recovery')
       setSession(session)
       if (session) loadUserAndData(session.user.email)
       else {
@@ -159,63 +169,105 @@ export default function App() {
     )
   }
 
-  // Tela de Login (quando Supabase está ativo e usuário não está logado)
-  if (isSupabaseConfigured && !session) {
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault()
+    setAuthError('')
+    setAuthNotice('')
+    const targetEmail = email.trim().toLowerCase()
+    if (!targetEmail) { setAuthError('Informe o e-mail da conta para receber o link.'); return }
+    const redirectTo = window.location.origin + window.location.pathname
+    const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, { redirectTo })
+    if (error) setAuthError('Não foi possível enviar o e-mail de recuperação: ' + error.message)
+    else setAuthNotice('Se o endereço estiver cadastrado, você receberá um e-mail com o link para redefinir a senha.')
+  }
+
+  const handleUpdatePassword = async (e) => {
+    e.preventDefault()
+    setAuthError('')
+    if (recoveryPassword.length < 12) { setAuthError('A nova senha deve ter pelo menos 12 caracteres.'); return }
+    const { error } = await supabase.auth.updateUser({ password: recoveryPassword })
+    if (error) setAuthError('Não foi possível atualizar a senha: ' + error.message)
+    else { setAuthMode('login'); setRecoveryPassword(''); setPassword(''); setAuthNotice('Senha alterada com sucesso. Entre com a nova senha.'); await supabase.auth.signOut() }
+  }
+
+  const handleAccessRequest = async (e) => {
+    e.preventDefault()
+    setAuthError('')
+    setAuthNotice('')
+    const { error } = await supabase.from('solicitacoes_acesso').insert({
+      nome: requestName.trim(), email: requestEmail.trim().toLowerCase(),
+      empresa: requestCompany.trim() || null, cnpj: requestCnpj.replace(/\\D/g, '') || null,
+      telefone: requestPhone.trim() || null, mensagem: requestMessage.trim() || null,
+    })
+    if (error) setAuthError(error.code === '23505' ? 'Já existe uma solicitação pendente para este e-mail.' : 'Não foi possível enviar a solicitação: ' + error.message)
+    else {
+      setAuthNotice('Solicitação enviada! A equipe RADIS analisará seus dados e entrará em contato.')
+      setRequestName(''); setRequestEmail(''); setRequestCompany(''); setRequestCnpj(''); setRequestPhone(''); setRequestMessage('')
+      setAuthMode('login')
+    }
+  }
+
+  // Tela pública de autenticação e solicitação de acesso.
+  if (isSupabaseConfigured && (!session || authMode === 'recovery')) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
-        <div className="max-w-md w-full bg-white rounded-2xl p-8 shadow-xl space-y-6">
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4 py-8">
+        <div className="max-w-md w-full bg-white rounded-2xl p-8 shadow-xl space-y-5">
           <div className="text-center">
-            <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center mx-auto mb-3">
-              <Sun className="w-7 h-7" />
-            </div>
+            <div className="w-12 h-12 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center mx-auto mb-3"><Sun className="w-7 h-7" /></div>
             <h1 className="text-2xl font-extrabold text-slate-900">Portal RADIS Solar</h1>
             <p className="text-sm text-slate-500 mt-1">Acesso exclusivo para Distribuidores e Gestão Comercial</p>
           </div>
+          {authError && <div role="alert" className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">{authError}</div>}
+          {authNotice && <div role="status" className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium">{authNotice}</div>}
 
-          {authError && (
-            <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium">
-              {authError}
-            </div>
+          {authMode === 'recovery' ? (
+            <form onSubmit={handleUpdatePassword} className="space-y-4">
+              <h2 className="font-bold text-slate-900">Criar nova senha</h2>
+              <label className="block text-xs font-bold uppercase text-slate-600">Nova senha</label>
+              <input type="password" required minLength={12} autoComplete="new-password" value={recoveryPassword} onChange={e=>setRecoveryPassword(e.target.value)} placeholder="Mínimo de 12 caracteres" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <button className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-lg">Salvar nova senha</button>
+            </form>
+          ) : authMode === 'forgot' ? (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <h2 className="font-bold text-slate-900">Recuperar senha</h2>
+              <p className="text-xs text-slate-500">Enviaremos um link seguro para o e-mail cadastrado.</p>
+              <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="E-mail corporativo" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <button className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-lg">Enviar link de recuperação</button>
+              <button type="button" onClick={()=>{setAuthMode('login');setAuthError('');setAuthNotice('')}} className="w-full text-sm text-slate-600">Voltar ao login</button>
+            </form>
+          ) : authMode === 'request' ? (
+            <form onSubmit={handleAccessRequest} className="space-y-3">
+              <h2 className="font-bold text-slate-900">Solicitar cadastro</h2>
+              <input required minLength={2} value={requestName} onChange={e=>setRequestName(e.target.value)} placeholder="Nome completo" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <input required type="email" value={requestEmail} onChange={e=>setRequestEmail(e.target.value)} placeholder="E-mail corporativo" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <input value={requestCompany} onChange={e=>setRequestCompany(e.target.value)} placeholder="Empresa / Distribuidor" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <input value={requestCnpj} onChange={e=>setRequestCnpj(e.target.value)} placeholder="CNPJ (opcional)" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <input value={requestPhone} onChange={e=>setRequestPhone(e.target.value)} placeholder="Telefone / WhatsApp (opcional)" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <textarea value={requestMessage} onChange={e=>setRequestMessage(e.target.value)} placeholder="Informações adicionais (opcional)" rows={2} className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+              <button className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-lg">Enviar solicitação</button>
+              <button type="button" onClick={()=>{setAuthMode('login');setAuthError('');setAuthNotice('')}} className="w-full text-sm text-slate-600">Voltar ao login</button>
+            </form>
+          ) : (
+            <>
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">E-mail corporativo</label>
+                  <input type="email" required autoComplete="username" value={email} onChange={e=>setEmail(e.target.value)} placeholder="seuemail@distribuidor.com.br" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Senha</label>
+                  <input type="password" required autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Sua senha" className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm" />
+                  <button type="button" onClick={()=>{setAuthMode('forgot');setAuthError('');setAuthNotice('')}} className="mt-2 text-xs font-semibold text-emerald-700 hover:underline">Esqueceu a senha?</button>
+                </div>
+                <button type="submit" className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700">Entrar no Painel</button>
+              </form>
+              <div className="border-t border-slate-200 pt-4 text-center">
+                <p className="text-sm text-slate-600 mb-2">Ainda não tem acesso ao portal?</p>
+                <button onClick={()=>{setAuthMode('request');setAuthError('');setAuthNotice('')}} className="w-full py-2.5 border border-emerald-600 text-emerald-700 font-bold rounded-lg hover:bg-emerald-50">Solicitar cadastro</button>
+              </div>
+            </>
           )}
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold uppercase text-slate-600 mb-1">E-mail Corporativo</label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seuemail@distribuidor.com.br"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold uppercase text-slate-600 mb-1">Senha</label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition"
-            >
-              Entrar no Painel
-            </button>
-          </form>
         </div>
       </div>
     )
