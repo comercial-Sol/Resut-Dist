@@ -504,7 +504,7 @@ export default function DistributorDashboard({
           </div>
           <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
             <input value={searchPagFat} onChange={(e) => setSearchPagFat(e.target.value)} placeholder="Buscar projeto, NF, revenda ou cliente" className="min-w-56 rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-            <select value={statusPagFat} onChange={(e) => setStatusPagFat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="TODOS">Todos os status</option><option value="FATURADO">Faturado</option><option value="CARTEIRA">Aguardando NF</option><option value="PAGO">Pago</option><option value="PENDENTE">Pendente</option><option value="CANCELADO">Cancelado</option></select>
+            <select value={statusPagFat} onChange={(e) => setStatusPagFat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="TODOS">Todos os status</option><option value="FATURADO">Faturado</option><option value="CARTEIRA">Aguardando NF</option><option value="PAGO">Pago</option><option value="PENDENTE">Pendente</option></select>
             <select value={sortPagFat} onChange={(e) => setSortPagFat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="valor_desc">Maior valor</option><option value="valor_asc">Menor valor</option><option value="data_desc">Data mais recente</option><option value="data_asc">Data mais antiga</option></select>
             <span className="text-xs text-slate-500">{pagFatFiltrado.length} projetos no período</span>
           </div>
