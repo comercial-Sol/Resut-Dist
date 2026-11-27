@@ -584,14 +584,14 @@ export default function AdminDashboard({
                 <thead className="bg-slate-800 text-white text-xs uppercase">
                   <tr>
                     <th className="px-4 py-3">Distribuidor (Raiz CNPJ)</th>
-                    <th className="px-4 py-3">Faturamento Ano</th>
+                    <th className="px-4 py-3">Faturamento no Período</th>
                     <th className="px-4 py-3">Média Mensal</th>
                     <th className="px-4 py-3">Faixa / %</th>
                     <th className="px-4 py-3">Equipe 3P (+1%)</th>
                     <th className="px-4 py-3">Revendas Ativas</th>
                     <th className="px-4 py-3">Recorrentes</th>
                     <th className="px-4 py-3">Comissão Qlik (Período)</th>
-                    <th className="px-4 py-3">Total RADIS (Tri)</th>
+                    <th className="px-4 py-3">Total RADIS (Período)</th>
                     <th className="px-4 py-3">Painel</th>
                   </tr>
                 </thead>
