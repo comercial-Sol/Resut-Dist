@@ -264,6 +264,8 @@ export default function AdminDashboard({
   const handleApproveRequest = async (request) => {
     const cnpjRaiz = solicitacaoCnpj[request.id] || ''
     if (!cnpjRaiz) { setSolicitacaoStatus('Selecione o distribuidor para aprovar a solicitação.'); return }
+    const tempPassword = solicitacaoSenha[request.id] || ''
+    if (tempPassword && tempPassword.length < 12) { setSolicitacaoStatus('A senha temporária precisa ter pelo menos 12 caracteres. Apague o campo para enviar convite por e-mail, se a conta ainda não existir.'); return }
     setProcessingRequest(request.id)
     setSolicitacaoStatus('')
     try {
@@ -635,9 +637,9 @@ export default function AdminDashboard({
                         <select value={solicitacaoCargo[request.id] || 'Vendedor'} onChange={e=>setSolicitacaoCargo(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                           <option>Vendedor</option><option>Gerente</option><option>Diretor</option>
                         </select>
-                        <input type="password" autoComplete="new-password" placeholder="Senha temporária opcional" value={solicitacaoSenha[request.id] || ''} onChange={e=>setSolicitacaoSenha(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        <input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Senha temporária (mín. 12)" value={solicitacaoSenha[request.id] || ''} onChange={e=>setSolicitacaoSenha(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                       </div>
-                      <p className="text-xs text-slate-500">Sem senha temporária: será enviado convite por e-mail para o usuário criar a senha. Se a conta já existir, informe uma senha temporária de pelo menos 12 caracteres.</p>
+                      <p className="text-xs text-slate-500">Deixe em branco para enviar convite por e-mail (conta nova). Se a conta já existir, informe uma senha temporária com no mínimo 12 caracteres. A senha não pode ser visualizada depois.</p>
                       <div className="flex gap-2">
                         <button disabled={processingRequest===request.id} onClick={()=>handleApproveRequest(request)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">{processingRequest===request.id?'Processando...':'Aprovar e enviar convite'}</button>
                         <button disabled={processingRequest===request.id} onClick={()=>handleRejectRequest(request)} className="px-4 py-2 border border-rose-200 text-rose-700 rounded-lg text-sm font-bold disabled:opacity-50">Recusar</button>
