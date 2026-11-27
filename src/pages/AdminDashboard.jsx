@@ -42,6 +42,7 @@ export default function AdminDashboard({
   const [solicitacaoCnpj, setSolicitacaoCnpj] = useState({})
   const [solicitacaoCargo, setSolicitacaoCargo] = useState({})
   const [solicitacaoSenha, setSolicitacaoSenha] = useState({})
+  const [senhaAdmin, setSenhaAdmin] = useState({})
   const [processingRequest, setProcessingRequest] = useState('')
 
 
@@ -301,6 +302,23 @@ export default function AdminDashboard({
     } finally {
       setProcessingRequest('')
     }
+  }
+
+  const handleSetAccountPassword = async (email) => {
+    const tempPassword = senhaAdmin[email] || ''
+    if (tempPassword.length < 12) { setSolicitacaoStatus('A senha temporária precisa ter pelo menos 12 caracteres.'); return }
+    if (!window.confirm('Definir uma nova senha temporária e confirmar o e-mail de ' + email + '?')) return
+    setSolicitacaoStatus('')
+    const { data, error } = await supabase.functions.invoke('approve-access-request', { body: { action: 'set_password', email, tempPassword } })
+    if (error) {
+      let detail = error.message || 'Falha ao atualizar a senha.'
+      try { const payload = await error.context?.json?.(); if (payload?.error) detail = payload.error } catch {}
+      setSolicitacaoStatus('Não foi possível atualizar a conta ' + email + ': ' + detail)
+      return
+    }
+    if (!data?.ok) { setSolicitacaoStatus(data?.error || 'O servidor não confirmou a alteração.'); return }
+    setSenhaAdmin(v => ({ ...v, [email]: '' }))
+    setSolicitacaoStatus('Senha temporária definida e e-mail confirmado para ' + email + '. Entregue a senha ao usuário por canal seguro e solicite a troca após o primeiro acesso.')
   }
 
   const handleConfirmAccountEmail = async (email) => {
@@ -692,7 +710,7 @@ export default function AdminDashboard({
               <table className="w-full text-sm text-left">
                 <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th><th className="px-4 py-3">Ações de senha</th></tr></thead>
                 <tbody className="divide-y divide-slate-200">
-                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3"><button onClick={()=>handleSendPasswordReset(u.email)} className="text-xs font-semibold text-emerald-700 hover:underline">Enviar link para redefinir senha</button><div className="mt-2"><button onClick={()=>handleConfirmAccountEmail(u.email)} className="text-xs font-semibold text-blue-700 hover:underline">Confirmar e-mail da conta</button></div></td></tr>})}
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3"><button onClick={()=>handleSendPasswordReset(u.email)} className="text-xs font-semibold text-emerald-700 hover:underline">Enviar link para redefinir senha</button><div className="mt-2"><button onClick={()=>handleConfirmAccountEmail(u.email)} className="text-xs font-semibold text-blue-700 hover:underline">Confirmar e-mail da conta</button></div><div className="mt-2 flex flex-col gap-1"><input type="password" autoComplete="new-password" minLength={12} maxLength={128} placeholder="Nova senha temporária (12+)" value={senhaAdmin[u.email] || ''} onChange={e=>setSenhaAdmin(v=>({...v,[u.email]:e.target.value}))} className="w-48 rounded border border-slate-300 px-2 py-1 text-xs" /><button onClick={()=>handleSetAccountPassword(u.email)} className="text-left text-xs font-semibold text-rose-700 hover:underline">Definir senha e confirmar e-mail</button></div></td></tr>})}
                 </tbody>
               </table>
             </div>
