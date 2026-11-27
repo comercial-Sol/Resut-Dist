@@ -12,6 +12,13 @@ import { parseQlikPagFatFile, parseQlikCriadasFile } from '../utils/qlikParser'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import DistributorDashboard from './DistributorDashboard'
 
+const MAX_IMPORT_FILE_BYTES = 50 * 1024 * 1024
+const validateImportFile = (file) => {
+  const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'))
+  if (!['.xlsx', '.xls', '.csv'].includes(extension)) throw new Error('Formato inválido. Envie somente arquivos XLSX, XLS ou CSV.')
+  if (!file.size || file.size > MAX_IMPORT_FILE_BYTES) throw new Error('O arquivo está vazio ou excede o limite de 50 MB.')
+}
+
 export default function AdminDashboard({
   distribuidores,
   projetosPagFat,
@@ -175,6 +182,7 @@ export default function AdminDashboard({
   const handleUploadPagFat = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
+    try { validateImportFile(file) } catch (err) { setUploadStatus(err.message); e.target.value = ''; return }
     setUploadingPag(true)
     setUploadStatus('Lendo e deduplicando planilha de Projetos Pagos/Faturados do Qlik...')
     try {
@@ -211,6 +219,7 @@ export default function AdminDashboard({
   const handleUploadCriadas = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
+    try { validateImportFile(file) } catch (err) { setUploadStatus(err.message); e.target.value = ''; return }
     setUploadingCri(true)
     setUploadStatus('Lendo planilha de Projetos Criados (Funil) do Qlik...')
     try {
