@@ -12,6 +12,8 @@ import {
 import CartaoSimulator from '../components/CartaoSimulator'
 import PoliticaRadisTab from '../components/PoliticaRadisTab'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import PeriodFilter from '../components/PeriodFilter'
+import { inSelectedPeriod, rowMonth, getLatestSelectedMonth, countSelectedMonths, periodLabel } from '../utils/periodFilters'
 
 const MESES_LABELS = [
   { num: '01', nome: 'Jan' }, { num: '02', nome: 'Fev' }, { num: '03', nome: 'Mar' },
@@ -27,12 +29,26 @@ export default function DistributorDashboard({
   crmRecords = [],
   userEmail,
   onCrmUpdated,
+  initialSelectedYears,
+  initialSelectedMonths,
+  initialPeriodMode,
 }) {
+  const now = new Date()
+  const currentYear = String(now.getFullYear())
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0')
   const [activeTab, setActiveTab] = useState('geral')
-  const [anoSelecionado, setAnoSelecionado] = useState(String(new Date().getFullYear()))
-  const [mesVigente, setMesVigente] = useState(String(new Date().getMonth() + 1).padStart(2, '0'))
+  const [selectedYears, setSelectedYears] = useState(initialSelectedYears?.length ? initialSelectedYears : [currentYear])
+  const [selectedMonths, setSelectedMonths] = useState(initialSelectedMonths?.length ? initialSelectedMonths : [currentMonth])
+  const [periodMode, setPeriodMode] = useState(initialPeriodMode || 'current')
   const [searchRevenda, setSearchRevenda] = useState('')
   const [statusFiltro, setStatusFiltro] = useState('TODOS')
+  const [sortRevendas, setSortRevendas] = useState('faturamento_desc')
+  const [searchFunil, setSearchFunil] = useState('')
+  const [sortFunil, setSortFunil] = useState('valor_desc')
+  const [etapaFiltroFunil, setEtapaFiltroFunil] = useState('TODAS')
+  const [searchPagFat, setSearchPagFat] = useState('')
+  const [sortPagFat, setSortPagFat] = useState('valor_desc')
+  const [statusPagFat, setStatusPagFat] = useState('TODOS')
   const [editingCrm, setEditingCrm] = useState({})
   const [savingCnpj, setSavingCnpj] = useState(null)
 
@@ -43,107 +59,149 @@ export default function DistributorDashboard({
   }, [crmRecords])
 
   const anosDisponiveis = useMemo(() => {
-    const years = new Set([String(new Date().getFullYear())])
+    const years = new Set([currentYear])
     projetosPagFat.forEach((p) => {
-      const reference = p.mes_referencia || p.data_emissao_nf || p.data_pagamento || p.data_criacao
-      const year = reference ? String(reference).slice(0, 4) : ''
-      if (/^\d{4}$/.test(year)) years.add(year)
+      const year = rowMonth(p, 'pag').slice(0, 4)
+      if (year) years.add(year)
+    })
+    projetosFunil.forEach((f) => {
+      const year = rowMonth(f, 'funil').slice(0, 4)
+      if (year) years.add(year)
     })
     return [...years].sort((a, b) => Number(b) - Number(a))
-  }, [projetosPagFat])
+  }, [projetosPagFat, projetosFunil, currentYear])
 
-  // Faturamento mensal Realizado vs Meta
-  const dadosMensais = useMemo(() => {
-    return MESES_LABELS.map((m) => {
-      const ym = `${anoSelecionado}-${m.num}`
-      const realizado = projetosPagFat
-        .filter((p) => p.mes_referencia === ym && p.status_pagamento !== 'Cancelado' && (Boolean(p.numero_nf) || p.status_pagamento === 'Pago'))
-        .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
-      const meta = Number(distribuidor?.metas_mensais?.[ym]) || 0
-      return {
-        mes: `${m.nome}/${anoSelecionado.slice(2)}`,
-        ym,
-        Realizado: realizado,
-        Meta: meta,
-      }
-    })
-  }, [projetosPagFat, distribuidor, anoSelecionado])
+  const periodCaption = periodLabel(selectedYears, selectedMonths)
+  const latestSelected = getLatestSelectedMonth(selectedYears, selectedMonths)
+  const latestParts = latestSelected.split('-').map(Number)
+  const refYear = latestParts[0] || Number(currentYear)
+  const refMonth = latestParts[1] || Number(currentMonth)
+  const selectedMonthCount = Math.max(1, countSelectedMonths(selectedYears, selectedMonths))
 
-  // Cálculos dos 4 Trimestres (Comissão RADIS)
-  const trimestres = useMemo(() => {
-    const qDefs = [
-      { id: 1, nome: '1º Trimestre', meses: ['01', '02', '03'] },
-      { id: 2, nome: '2º Trimestre', meses: ['04', '05', '06'] },
-      { id: 3, nome: '3º Trimestre', meses: ['07', '08', '09'] },
-      { id: 4, nome: '4º Trimestre', meses: ['10', '11', '12'] },
-    ]
-    return qDefs.map((q) => {
-      const soma = q.meses.reduce((acc, mNum) => {
-        const found = dadosMensais.find((d) => d.ym === `${anoSelecionado}-${mNum}`)
-        return acc + (found ? found.Realizado : 0)
-      }, 0)
-      const mediaMensal = soma / 3
-      const tier = getRadisTier(mediaMensal, distribuidor?.possui_equipe_3_pessoas)
-      return {
-        ...q,
-        soma,
-        mediaMensal,
-        ...tier,
-        valorComissaoEstimada: soma * tier.comissaoTotal,
-      }
-    })
-  }, [dadosMensais, anoSelecionado, distribuidor])
+  const projetosPagFatPeriodo = useMemo(
+    () => projetosPagFat.filter((p) => inSelectedPeriod(p, selectedYears, selectedMonths, 'pag')),
+    [projetosPagFat, selectedYears, selectedMonths]
+  )
+  const projetosFunilPeriodo = useMemo(
+    () => projetosFunil.filter((f) => inSelectedPeriod(f, selectedYears, selectedMonths, 'funil')),
+    [projetosFunil, selectedYears, selectedMonths]
+  )
 
-  // Trimestre atual baseado no mês selecionado
-  const trimestreAtual = useMemo(() => {
-    const mInt = parseInt(mesVigente, 10)
-    const qIdx = Math.floor((mInt - 1) / 3)
-    return trimestres[qIdx] || trimestres[0]
-  }, [mesVigente, trimestres])
+  const projetosValidos = useMemo(
+    () => projetosPagFatPeriodo.filter((p) => p.status_pagamento !== 'Cancelado'),
+    [projetosPagFatPeriodo]
+  )
+  const projetosFaturados = useMemo(
+    () => projetosValidos.filter((p) => Boolean(p.numero_nf) || p.status_pagamento === 'Pago'),
+    [projetosValidos]
+  )
+  const faturamentoPeriodo = projetosFaturados.reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+  const ticketMedio = projetosFaturados.length ? faturamentoPeriodo / projetosFaturados.length : 0
+  const tierPeriodo = getRadisTier(faturamentoPeriodo / selectedMonthCount, distribuidor?.possui_equipe_3_pessoas)
+  const comissaoPeriodo = faturamentoPeriodo * tierPeriodo.comissaoTotal
 
-  // Revendas consolidadas
+  const mesesSelecionados = useMemo(
+    () => selectedYears.flatMap((year) => selectedMonths.map((month) => `${year}-${month}`)).sort(),
+    [selectedYears, selectedMonths]
+  )
+  const dadosMensais = useMemo(() => mesesSelecionados.map((ym) => {
+    const [year, month] = ym.split('-')
+    const monthName = MESES_LABELS.find((m) => m.num === month)?.nome || month
+    const realizado = projetosPagFat.filter((p) =>
+      rowMonth(p, 'pag') === ym &&
+      p.status_pagamento !== 'Cancelado' &&
+      (Boolean(p.numero_nf) || p.status_pagamento === 'Pago')
+    ).reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
+    const meta = Number(distribuidor?.metas_mensais?.[ym]) || 0
+    return { mes: `${monthName}/${year}`, ym, Realizado: realizado, Meta: meta }
+  }), [mesesSelecionados, projetosPagFat, distribuidor])
+
+  // Status da revenda usa histórico completo até o último mês selecionado.
+  // Valores e quantidades exibidos respeitam o período escolhido.
+  const revendasHistorico = useMemo(() => buildRevendasConsolidado(
+    projetosPagFat, projetosFunil, crmMap, refYear, refMonth
+  ), [projetosPagFat, projetosFunil, crmMap, refYear, refMonth])
+
   const revendas = useMemo(() => {
-    return buildRevendasConsolidado(
-      projetosPagFat,
-      projetosFunil,
-      crmMap,
-      parseInt(anoSelecionado, 10),
-      parseInt(mesVigente, 10)
-    )
-  }, [projetosPagFat, projetosFunil, crmMap, anoSelecionado, mesVigente])
+    const pagMap = new Map()
+    projetosFaturados.forEach((p) => {
+      const cnpj = String(p.revenda_cnpj || '').replace(/\\D/g, '')
+      if (!cnpj) return
+      const item = pagMap.get(cnpj) || { total_faturado: 0, qtd_projetos_vendidos: 0 }
+      item.total_faturado += Number(p.valor_total) || 0
+      item.qtd_projetos_vendidos += 1
+      pagMap.set(cnpj, item)
+    })
+    const funilMap = new Map()
+    projetosFunilPeriodo.forEach((f) => {
+      const cnpj = String(f.revenda_cnpj || '').replace(/\\D/g, '')
+      if (cnpj) funilMap.set(cnpj, (funilMap.get(cnpj) || 0) + 1)
+    })
+    return revendasHistorico.map((r) => ({
+      ...r,
+      total_faturado: pagMap.get(r.revenda_cnpj)?.total_faturado || 0,
+      qtd_projetos_vendidos: pagMap.get(r.revenda_cnpj)?.qtd_projetos_vendidos || 0,
+      qtd_propostas_criadas: funilMap.get(r.revenda_cnpj) || 0,
+    }))
+  }, [revendasHistorico, projetosFaturados, projetosFunilPeriodo])
 
   const qtdAtivas = revendas.filter((r) => r.status === 'Ativa' || r.status === 'Recorrente').length
   const qtdRecorrentes = revendas.filter((r) => r.status === 'Recorrente').length
+  const bateuBonusAtivas = qtdAtivas >= tierPeriodo.minAtivas
+  const bateuBonusRecorrentes = qtdRecorrentes >= tierPeriodo.minRecorrentes
 
-  const bateuBonusAtivas = qtdAtivas >= trimestreAtual.minAtivas
-  const bateuBonusRecorrentes = qtdRecorrentes >= trimestreAtual.minRecorrentes
-
-  // A aba Funil representa somente oportunidades ainda abertas; convertidos e cancelados
-  // permanecem na base histórica, mas não entram no pipeline ativo.
-  const projetosFunilAbertos = useMemo(() => projetosFunil.filter((f) => {
+  const projetosFunilAbertos = useMemo(() => projetosFunilPeriodo.filter((f) => {
     const status = String(f.status_pagamento || '').trim().toLowerCase()
     const etapa = String(f.etapa_venda || '').trim().toLowerCase()
     return !['pago', 'cancelado', 'recusado'].includes(status) && etapa !== 'projeto cancelado'
-  }), [projetosFunil])
+  }), [projetosFunilPeriodo])
 
-  // Indicadores do Painel Geral (Funil, Carteira, Possibilidade de Conversão, Ticket Médio)
-  const ymVigente = `${anoSelecionado}-${mesVigente}`
   const preOrcamentoMes = projetosFunilAbertos
-    .filter((f) => f.mes_criacao === ymVigente && f.etapa_venda?.toLowerCase() === 'pré-orçamento')
+    .filter((f) => f.etapa_venda?.toLowerCase() === 'pré-orçamento')
     .reduce((acc, f) => acc + (Number(f.valor_total) || 0), 0)
-
-  const carteiraNaoFaturada = projetosPagFat
-    .filter((p) => p.status_pagamento !== 'Cancelado' && !p.numero_nf)
+  const carteiraNaoFaturada = projetosValidos
+    .filter((p) => !p.numero_nf && p.status_pagamento !== 'Pago')
     .reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
-
-  const jaConvertidoMes = dadosMensais.find((d) => d.ym === ymVigente)?.Realizado || 0
+  const jaConvertidoMes = faturamentoPeriodo
   const possibilidadeConversao = preOrcamentoMes * 0.1
-
-  const projetosValidos = projetosPagFat.filter((p) => p.status_pagamento !== 'Cancelado')
-  const projetosFaturados = projetosValidos.filter((p) => Boolean(p.numero_nf) || p.status_pagamento === 'Pago')
-  const totalFaturadoGeral = projetosFaturados.reduce((acc, p) => acc + (Number(p.valor_total) || 0), 0)
-  const ticketMedio = projetosFaturados.length > 0 ? totalFaturadoGeral / projetosFaturados.length : 0
   const projetosPorRevendaAtiva = qtdAtivas > 0 ? projetosValidos.length / qtdAtivas : 0
+
+  const funilFiltrado = useMemo(() => {
+    const search = searchFunil.trim().toLowerCase()
+    const rows = projetosFunilAbertos.filter((f) => {
+      const matchesText = !search || [
+        f.codigo_projeto, f.revenda_nome, f.revenda_cnpj, f.cliente_proposta, f.executivo_vendas, f.etapa_venda
+      ].some((value) => String(value || '').toLowerCase().includes(search))
+      const matchesStage = etapaFiltroFunil === 'TODAS' || f.etapa_venda === etapaFiltroFunil
+      return matchesText && matchesStage
+    })
+    return rows.sort((a, b) => {
+      if (sortFunil === 'valor_asc') return (Number(a.valor_total) || 0) - (Number(b.valor_total) || 0)
+      if (sortFunil === 'data_desc') return String(b.data_criacao || '').localeCompare(String(a.data_criacao || ''))
+      if (sortFunil === 'data_asc') return String(a.data_criacao || '').localeCompare(String(b.data_criacao || ''))
+      return (Number(b.valor_total) || 0) - (Number(a.valor_total) || 0)
+    })
+  }, [projetosFunilAbertos, searchFunil, etapaFiltroFunil, sortFunil])
+
+  const pagFatFiltrado = useMemo(() => {
+    const search = searchPagFat.trim().toLowerCase()
+    const rows = projetosValidos.filter((p) => {
+      const matchesText = !search || [
+        p.codigo_projeto, p.pedido_erp, p.revenda_nome, p.revenda_cnpj, p.cliente_nome, p.numero_nf, p.status_pagamento
+      ].some((value) => String(value || '').toLowerCase().includes(search))
+      const matchesStatus = statusPagFat === 'TODOS' ||
+        (statusPagFat === 'FATURADO' ? Boolean(p.numero_nf) :
+          statusPagFat === 'CARTEIRA' ? !p.numero_nf && p.status_pagamento !== 'Pago' :
+            String(p.status_pagamento || '').toUpperCase() === statusPagFat)
+      return matchesText && matchesStatus
+    })
+    return rows.sort((a, b) => {
+      if (sortPagFat === 'valor_asc') return (Number(a.valor_total) || 0) - (Number(b.valor_total) || 0)
+      if (sortPagFat === 'data_desc') return String(b.data_emissao_nf || b.data_pagamento || b.data_criacao || '').localeCompare(String(a.data_emissao_nf || a.data_pagamento || a.data_criacao || ''))
+      if (sortPagFat === 'data_asc') return String(a.data_emissao_nf || a.data_pagamento || a.data_criacao || '').localeCompare(String(b.data_emissao_nf || b.data_pagamento || b.data_criacao || ''))
+      return (Number(b.valor_total) || 0) - (Number(a.valor_total) || 0)
+    })
+  }, [projetosValidos, searchPagFat, statusPagFat, sortPagFat])
 
   const handleSaveCrm = async (revendaCnpj) => {
     const draft = editingCrm[revendaCnpj]
@@ -176,6 +234,11 @@ export default function DistributorDashboard({
       r.revenda_cnpj.includes(searchRevenda)
     const matchStatus = statusFiltro === 'TODOS' || r.status === statusFiltro
     return matchText && matchStatus
+  }).sort((a, b) => {
+    if (sortRevendas === 'status') return a.status.localeCompare(b.status) || b.total_faturado - a.total_faturado
+    if (sortRevendas === 'projetos') return (b.qtd_projetos_vendidos + b.qtd_propostas_criadas) - (a.qtd_projetos_vendidos + a.qtd_propostas_criadas)
+    if (sortRevendas === 'faturamento_asc') return a.total_faturado - b.total_faturado
+    return b.total_faturado - a.total_faturado
   })
 
   const tabs = [
@@ -190,7 +253,7 @@ export default function DistributorDashboard({
   return (
     <div className="space-y-6">
       {/* Cabeçalho do Distribuidor */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex flex-col gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-bold">
@@ -203,29 +266,22 @@ export default function DistributorDashboard({
           <h1 className="text-xl font-extrabold text-slate-900 mt-1">{distribuidor?.nome}</h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <label className="block text-[11px] font-semibold text-slate-500 uppercase">Ano</label>
-            <select
-              value={anoSelecionado}
-              onChange={(e) => setAnoSelecionado(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold bg-white"
-            >
-              {anosDisponiveis.map((ano) => <option key={ano} value={ano}>{ano}</option>)}
-            </select>
+            <p className="mb-1 text-[10px] font-bold uppercase text-slate-500">Filtros aplicados em todas as abas</p>
+            <PeriodFilter
+              yearsAvailable={anosDisponiveis}
+              selectedYears={selectedYears}
+              selectedMonths={selectedMonths}
+              periodMode={periodMode}
+              onChange={({ selectedYears: years, selectedMonths: months, periodMode: mode }) => {
+                setSelectedYears(years)
+                setSelectedMonths(months)
+                setPeriodMode(mode)
+              }}
+            />
           </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-500 uppercase">Mês Referência</label>
-            <select
-              value={mesVigente}
-              onChange={(e) => setMesVigente(e.target.value)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold bg-white"
-            >
-              {MESES_LABELS.map((m) => (
-                <option key={m.num} value={m.num}>{m.nome}/{anoSelecionado}</option>
-              ))}
-            </select>
-          </div>
+          <span className="text-xs font-semibold text-slate-500">{periodCaption}</span>
         </div>
       </div>
 
@@ -254,32 +310,21 @@ export default function DistributorDashboard({
       {/* ABA 1: PAINEL GERAL */}
       {activeTab === 'geral' && (
         <div className="space-y-6">
-          {/* Cards dos 4 Trimestres (Comissão RADIS) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {trimestres.map((q) => (
-              <div key={q.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold uppercase text-slate-500">{q.nome}</span>
-                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700">
-                    {q.labelFaixa}
-                  </span>
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-bold uppercase text-slate-500">Comissão RADIS · {periodCaption}</span>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-3xl font-extrabold text-slate-900">{formatPercent(tierPeriodo.comissaoTotal)}</span>
+                  <span className="text-xs text-slate-500">({formatPercent(tierPeriodo.comissaoBase)} base + {formatPercent(tierPeriodo.bonusEquipe)} equipe)</span>
                 </div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-extrabold text-slate-900">
-                    {formatPercent(q.comissaoTotal)}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    ({formatPercent(q.comissaoBase)} + {formatPercent(q.bonusEquipe)} eq.)
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-2">
-                  Faturado Tri: <strong className="text-slate-700">{formatCurrency(q.soma)}</strong>
-                </p>
-                <p className="text-xs text-emerald-700 font-semibold mt-0.5">
-                  Comissão Est.: {formatCurrency(q.valorComissaoEstimada)}
-                </p>
+                <p className="mt-1 text-xs text-slate-500">Faturamento reconhecido no período: <strong className="text-slate-800">{formatCurrency(faturamentoPeriodo)}</strong> · média mensal: {formatCurrency(faturamentoPeriodo / selectedMonthCount)}</p>
               </div>
-            ))}
+              <div className="text-right">
+                <span className="text-xs text-slate-500">Comissão estimada</span>
+                <div className="text-2xl font-extrabold text-emerald-700">{formatCurrency(comissaoPeriodo)}</div>
+              </div>
+            </div>
           </div>
 
           {/* Cards de Gatilhos de Bônus RADIS (Revendas Ativas & Recorrentes) */}
@@ -290,7 +335,7 @@ export default function DistributorDashboard({
                   <span className="text-xs font-bold uppercase text-slate-500">Gatilho Revendas Ativas (Últimos 3 meses)</span>
                   <div className="flex items-baseline gap-3 mt-1">
                     <span className="text-3xl font-extrabold text-slate-900">{qtdAtivas}</span>
-                    <span className="text-sm text-slate-600">/ mínimo {trimestreAtual.minAtivas} ({trimestreAtual.labelFaixa})</span>
+                    <span className="text-sm text-slate-600">/ mínimo {tierPeriodo.minAtivas} ({tierPeriodo.labelFaixa})</span>
                   </div>
                 </div>
                 <div className="text-right">
@@ -300,7 +345,7 @@ export default function DistributorDashboard({
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
-                      <AlertCircle className="w-4 h-4" /> Faltam {trimestreAtual.minAtivas - qtdAtivas} revendas
+                      <AlertCircle className="w-4 h-4" /> Faltam {tierPeriodo.minAtivas - qtdAtivas} revendas
                     </span>
                   )}
                 </div>
@@ -313,7 +358,7 @@ export default function DistributorDashboard({
                   <span className="text-xs font-bold uppercase text-slate-500">Gatilho Revendas Recorrentes (6 meses seguidos)</span>
                   <div className="flex items-baseline gap-3 mt-1">
                     <span className="text-3xl font-extrabold text-slate-900">{qtdRecorrentes}</span>
-                    <span className="text-sm text-slate-600">/ mínimo {trimestreAtual.minRecorrentes} ({trimestreAtual.labelFaixa})</span>
+                    <span className="text-sm text-slate-600">/ mínimo {tierPeriodo.minRecorrentes} ({tierPeriodo.labelFaixa})</span>
                   </div>
                 </div>
                 <div className="text-right">
@@ -323,7 +368,7 @@ export default function DistributorDashboard({
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
-                      <AlertCircle className="w-4 h-4" /> Faltam {trimestreAtual.minRecorrentes - qtdRecorrentes} revendas
+                      <AlertCircle className="w-4 h-4" /> Faltam {tierPeriodo.minRecorrentes - qtdRecorrentes} revendas
                     </span>
                   )}
                 </div>
@@ -334,7 +379,7 @@ export default function DistributorDashboard({
           {/* KPIs Operacionais (Pré-Orçamento, Carteira, Possibilidade de Conversão, Ticket Médio) */}
           <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <span className="text-xs text-slate-500 block">Pré-Orçamento ({mesVigente}/{anoSelecionado})</span>
+              <span className="text-xs text-slate-500 block">Pré-Orçamento ({periodCaption})</span>
               <span className="text-lg font-extrabold text-slate-900 mt-1 block">{formatCurrency(preOrcamentoMes)}</span>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -342,7 +387,7 @@ export default function DistributorDashboard({
               <span className="text-lg font-extrabold text-amber-600 mt-1 block">{formatCurrency(carteiraNaoFaturada)}</span>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-              <span className="text-xs text-slate-500 block">Já Convertido (Mês)</span>
+              <span className="text-xs text-slate-500 block">Já Convertido (Período)</span>
               <span className="text-lg font-extrabold text-emerald-600 mt-1 block">{formatCurrency(jaConvertidoMes)}</span>
             </div>
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
@@ -365,7 +410,7 @@ export default function DistributorDashboard({
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="w-5 h-5 text-emerald-600" />
-              <h3 className="font-bold text-slate-900">Evolução de Faturamento: Realizado vs. Meta ({anoSelecionado})</h3>
+              <h3 className="font-bold text-slate-900">Evolução de Faturamento: Realizado vs. Meta ({periodCaption})</h3>
             </div>
             <div className="h-80 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -393,6 +438,12 @@ export default function DistributorDashboard({
               Dica comercial: Foque nos projetos de maior valor e agrupe propostas da mesma revenda para negociação em lote.
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+            <input value={searchFunil} onChange={(e) => setSearchFunil(e.target.value)} placeholder="Buscar código, revenda, cliente ou executivo" className="min-w-56 rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+            <select value={etapaFiltroFunil} onChange={(e) => setEtapaFiltroFunil(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="TODAS">Todas as etapas</option>{[...new Set(projetosFunilAbertos.map((f) => f.etapa_venda).filter(Boolean))].sort().map((stage) => <option key={stage} value={stage}>{stage}</option>)}</select>
+            <select value={sortFunil} onChange={(e) => setSortFunil(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="valor_desc">Maior proposta</option><option value="valor_asc">Menor proposta</option><option value="data_desc">Mais recentes</option><option value="data_asc">Mais antigas</option></select>
+            <span className="text-xs text-slate-500">{funilFiltrado.length} projetos no período</span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-slate-800 text-white text-xs uppercase">
@@ -408,7 +459,7 @@ export default function DistributorDashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {projetosFunilAbertos.slice(0, 150).map((f) => (
+                {funilFiltrado.slice(0, 150).map((f) => (
                   <tr key={f.codigo_projeto} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-mono text-xs font-bold text-slate-800">{f.codigo_projeto}</td>
                     <td className="px-4 py-3 text-slate-600">{f.data_criacao ? f.data_criacao.slice(0, 10) : '-'}</td>
@@ -449,6 +500,12 @@ export default function DistributorDashboard({
               Projetos financiados têm a comissão liberada após emissão da NF e saída da mercadoria.
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+            <input value={searchPagFat} onChange={(e) => setSearchPagFat(e.target.value)} placeholder="Buscar projeto, NF, revenda ou cliente" className="min-w-56 rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+            <select value={statusPagFat} onChange={(e) => setStatusPagFat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="TODOS">Todos os status</option><option value="FATURADO">Faturado</option><option value="CARTEIRA">Aguardando NF</option><option value="PAGO">Pago</option><option value="PENDENTE">Pendente</option><option value="CANCELADO">Cancelado</option></select>
+            <select value={sortPagFat} onChange={(e) => setSortPagFat(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs"><option value="valor_desc">Maior valor</option><option value="valor_asc">Menor valor</option><option value="data_desc">Data mais recente</option><option value="data_asc">Data mais antiga</option></select>
+            <span className="text-xs text-slate-500">{pagFatFiltrado.length} projetos no período</span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-slate-800 text-white text-xs uppercase">
@@ -465,7 +522,7 @@ export default function DistributorDashboard({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {projetosValidos.slice(0, 200).map((p) => {
+                {pagFatFiltrado.slice(0, 200).map((p) => {
                   const faturado = Boolean(p.numero_nf)
                   return (
                     <tr key={p.codigo_projeto} className="hover:bg-slate-50">
@@ -527,6 +584,7 @@ export default function DistributorDashboard({
                   className="pl-9 pr-3 py-1.5 rounded-lg border border-slate-300 text-sm"
                 />
               </div>
+              <select value={sortRevendas} onChange={(e) => setSortRevendas(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium"><option value="faturamento_desc">Maior faturamento</option><option value="faturamento_asc">Menor faturamento</option><option value="status">Status</option><option value="projetos">Mais projetos/propostas</option></select>
               <select
                 value={statusFiltro}
                 onChange={(e) => setStatusFiltro(e.target.value)}
