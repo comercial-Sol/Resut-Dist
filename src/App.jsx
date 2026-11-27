@@ -6,8 +6,6 @@ import DistributorDashboard from './pages/DistributorDashboard'
 import AdminDashboard from './pages/AdminDashboard'
 
 // Supabase/PostgREST limita cada resposta; buscar páginas até esgotar a tabela.
-const normalizeCompanyName = (value = '') => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
-
 const TABLE_ORDER_COLUMNS = {
   distribuidores: 'cnpj_raiz',
   projetos_pag_fat: 'codigo_projeto',
@@ -171,6 +169,19 @@ export default function App() {
     finally { setRefreshing(false) }
   }
 
+  // Production must fail closed: demo/admin preview is for local development only.
+  if (!isSupabaseConfigured && !import.meta.env.DEV) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
+        <section className="max-w-lg rounded-2xl bg-white p-8 shadow-xl text-center space-y-3">
+          <Shield className="w-10 h-10 text-rose-600 mx-auto" />
+          <h1 className="text-xl font-extrabold text-slate-900">Portal temporariamente indisponível</h1>
+          <p className="text-sm text-slate-600">A configuração segura de conexão não foi carregada. O modo de demonstração está bloqueado em produção. Contate o administrador do portal.</p>
+        </section>
+      </main>
+    )
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -291,8 +302,10 @@ export default function App() {
   const activeCnpj = isSupabaseConfigured ? userAccess?.cnpj_raiz : demoCnpjRaiz
   const activeEmail = isSupabaseConfigured ? session?.user?.email : 'demo@radis.com.br'
   const currentDistribuidor = distribuidores.find((d) => d.cnpj_raiz === activeCnpj) || distribuidores[0]
-  const currentCompanyKey = normalizeCompanyName(currentDistribuidor?.nome || '')
-  const currentDistribuidorRoots = new Set(distribuidores.filter(d => normalizeCompanyName(d.nome || '') === currentCompanyKey).map(d => String(d.cnpj_raiz)))
+  // Supabase RLS returns only roots explicitly linked to this user; never infer access from company names.
+  const currentDistribuidorRoots = new Set(
+    isSupabaseConfigured ? distribuidores.map((d) => String(d.cnpj_raiz)) : [String(activeCnpj)]
+  )
 
   return (
     <div className="min-h-screen bg-slate-50">
