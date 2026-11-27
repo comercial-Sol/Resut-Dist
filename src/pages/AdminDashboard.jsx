@@ -384,15 +384,21 @@ export default function AdminDashboard({
 
   const handleToggleEquipe = async (dist) => {
     if (!isSupabaseConfigured || !supabase) return
-    await supabase
+    const groupId = dist.grupo_economico_id || dist.cnpj_raiz
+    const { error } = await supabase
       .from('distribuidores')
       .update({ possui_equipe_3_pessoas: !dist.possui_equipe_3_pessoas })
-      .eq('cnpj_raiz', dist.cnpj_raiz)
-    if (onDataRefresh) onDataRefresh()
+      .eq('grupo_economico_id', groupId)
+    if (error) { setSolicitacaoStatus('Não foi possível atualizar o bônus da equipe: ' + error.message); return }
+    if (onDataRefresh) await onDataRefresh()
   }
 
   if (previewDistCnpj) {
     const distObj = distribuidores.find((d) => d.cnpj_raiz === previewDistCnpj)
+    const previewGroupId = distObj?.grupo_economico_id || previewDistCnpj
+    const previewRoots = new Set(distribuidores
+      .filter((d) => (d.grupo_economico_id || d.cnpj_raiz) === previewGroupId)
+      .map((d) => String(d.cnpj_raiz)))
     return (
       <div className="space-y-4">
         <div className="bg-slate-900 text-white px-4 py-3 rounded-xl flex items-center justify-between">
@@ -408,12 +414,15 @@ export default function AdminDashboard({
         </div>
         <DistributorDashboard
           distribuidor={distObj}
-          projetosPagFat={projetosProcessados.filter((p) => p.cnpj_raiz === previewDistCnpj)}
+          projetosPagFat={projetosProcessados.filter((p) => previewRoots.has(String(p.cnpj_raiz)))}
           projetosFunil={projetosFunil.filter((f) => {
             const fCnpj = f.cnpj_raiz ? String(f.cnpj_raiz).replace(/\D/g, '').substring(0, 8) : ''
-            return fCnpj === previewDistCnpj
+            return previewRoots.has(fCnpj)
           })}
           userEmail={userEmail}
+          initialSelectedYears={selectedYears}
+          initialSelectedMonths={selectedMonths}
+          initialPeriodMode={periodMode}
         />
       </div>
     )
