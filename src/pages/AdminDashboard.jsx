@@ -289,6 +289,14 @@ export default function AdminDashboard({
     }
   }
 
+  const handleSendPasswordReset = async (email) => {
+    setSolicitacaoStatus('')
+    const redirectTo = window.location.origin + window.location.pathname
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
+    if (error) setSolicitacaoStatus('Erro ao enviar recuperação para ' + email + ': ' + error.message)
+    else setSolicitacaoStatus('Solicitação de redefinição enviada para ' + email + '. O usuário receberá um link seguro por e-mail.')
+  }
+
   const handleRejectRequest = async (request) => {
     if (!window.confirm('Recusar a solicitação de ' + request.email + '?')) return
     setProcessingRequest(request.id)
@@ -655,9 +663,9 @@ export default function AdminDashboard({
             <div className="p-4 font-bold text-slate-900">Contas com acesso liberado</div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
-                <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th></tr></thead>
+                <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th><th className="px-4 py-3">Ações de senha</th></tr></thead>
                 <tbody className="divide-y divide-slate-200">
-                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td></tr>})}
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td><td className="px-4 py-3"><button onClick={()=>handleSendPasswordReset(u.email)} className="text-xs font-semibold text-emerald-700 hover:underline">Enviar link para redefinir senha</button></td></tr>})}
                 </tbody>
               </table>
             </div>
