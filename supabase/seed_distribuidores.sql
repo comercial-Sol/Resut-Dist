@@ -122,3 +122,9 @@ ON CONFLICT (cnpj_raiz) DO UPDATE SET nome = EXCLUDED.nome, uf = COALESCE(NULLIF
 INSERT INTO private.distribuidor_cnpj_links (cnpj_raiz_a, cnpj_raiz_b, ativo)
 VALUES ('41649269', '76823327', true)
 ON CONFLICT (cnpj_raiz_a, cnpj_raiz_b) DO UPDATE SET ativo = true;
+
+
+-- Explicit economic group for the 2M CONNECTIONS roots. All other roots remain independent.
+UPDATE public.distribuidores
+SET grupo_economico_id = '2M_CONNECTIONS'
+WHERE cnpj_raiz IN ('41649269','76823327');
