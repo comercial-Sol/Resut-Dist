@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
@@ -36,6 +36,14 @@ export default function AdminDashboard({
   const [novoCargo, setNovoCargo] = useState('Vendedor')
   const [novoPerfil, setNovoPerfil] = useState('distribuidor')
   const [novoCnpjRaiz, setNovoCnpjRaiz] = useState(distribuidores[0]?.cnpj_raiz || '')
+  const [solicitacoes, setSolicitacoes] = useState([])
+  const [loadingSolicitacoes, setLoadingSolicitacoes] = useState(false)
+  const [solicitacaoStatus, setSolicitacaoStatus] = useState('')
+  const [solicitacaoCnpj, setSolicitacaoCnpj] = useState({})
+  const [solicitacaoCargo, setSolicitacaoCargo] = useState({})
+  const [solicitacaoSenha, setSolicitacaoSenha] = useState({})
+  const [processingRequest, setProcessingRequest] = useState('')
+
 
   // Tratamento e Filtragem de Dados com as Regras Solicitadas
   const projetosProcessados = useMemo(() => {
@@ -233,6 +241,63 @@ export default function AdminDashboard({
       e.target.value = ''
       setUploadingCri(false)
     }
+  }
+
+
+  const loadSolicitacoes = async () => {
+    if (!supabase || !isSupabaseConfigured) return
+    setLoadingSolicitacoes(true)
+    const { data, error } = await supabase.from('solicitacoes_acesso')
+      .select('*').order('criado_em', { ascending: false }).limit(200)
+    if (error) setSolicitacaoStatus('Erro ao carregar solicitações: ' + error.message)
+    else {
+      setSolicitacoes(data || [])
+      setSolicitacaoStatus('')
+    }
+    setLoadingSolicitacoes(false)
+  }
+
+  useEffect(() => {
+    if (adminTab === 'acessos') loadSolicitacoes()
+  }, [adminTab])
+
+  const handleApproveRequest = async (request) => {
+    const cnpjRaiz = solicitacaoCnpj[request.id] || ''
+    if (!cnpjRaiz) { setSolicitacaoStatus('Selecione o distribuidor para aprovar a solicitação.'); return }
+    setProcessingRequest(request.id)
+    setSolicitacaoStatus('')
+    try {
+      const { data, error } = await supabase.functions.invoke('approve-access-request', {
+        body: {
+          requestId: request.id,
+          cnpjRaiz,
+          cargo: solicitacaoCargo[request.id] || 'Vendedor',
+          tempPassword: solicitacaoSenha[request.id] || '',
+        },
+      })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      setSolicitacaoStatus(data?.invitationSent
+        ? 'Acesso aprovado e convite enviado para ' + request.email
+        : 'Acesso aprovado e vínculo atualizado para ' + request.email)
+      await loadSolicitacoes()
+      if (onDataRefresh) await onDataRefresh()
+    } catch (err) {
+      setSolicitacaoStatus('Não foi possível aprovar: ' + (err.message || 'Erro inesperado'))
+    } finally {
+      setProcessingRequest('')
+    }
+  }
+
+  const handleRejectRequest = async (request) => {
+    if (!window.confirm('Recusar a solicitação de ' + request.email + '?')) return
+    setProcessingRequest(request.id)
+    const { error } = await supabase.from('solicitacoes_acesso')
+      .update({ status: 'recusada', analisado_em: new Date().toISOString(), analisado_por: userEmail })
+      .eq('id', request.id).eq('status', 'pendente')
+    if (error) setSolicitacaoStatus('Erro ao recusar: ' + error.message)
+    else { setSolicitacaoStatus('Solicitação recusada.'); await loadSolicitacoes() }
+    setProcessingRequest('')
   }
 
   const handleAddUsuario = async (e) => {
@@ -529,96 +594,77 @@ export default function AdminDashboard({
       {/* TAB 3: GESTÃO DE ACESSOS */}
       {adminTab === 'acessos' && (
         <div className="space-y-6">
+          <section className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Solicitações de cadastro</h2>
+                <p className="text-sm text-slate-500">Analise os pedidos enviados pela tela de login. A aprovação cria ou vincula a conta e envia convite seguro.</p>
+              </div>
+              <button onClick={loadSolicitacoes} className="px-3 py-2 border rounded-lg text-sm font-semibold">Atualizar lista</button>
+            </div>
+            {solicitacaoStatus && <div role="status" className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">{solicitacaoStatus}</div>}
+            {loadingSolicitacoes ? <p className="text-sm text-slate-500">Carregando solicitações...</p> :
+              solicitacoes.filter(x => x.status === 'pendente').length === 0 ?
+                <p className="text-sm text-slate-500 py-4">Não há solicitações pendentes.</p> :
+                <div className="space-y-4">
+                  {solicitacoes.filter(x => x.status === 'pendente').map(request => (
+                    <article key={request.id} className="border border-slate-200 rounded-xl p-4 space-y-3">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <div>
+                          <h3 className="font-bold text-slate-900">{request.nome}</h3>
+                          <p className="text-sm text-slate-600">{request.email}</p>
+                          <p className="text-xs text-slate-500">{request.empresa || 'Empresa não informada'} · {request.telefone || 'Telefone não informado'}</p>
+                          <p className="text-xs text-slate-500">CNPJ informado: {request.cnpj || 'Não informado'} · {new Date(request.criado_em).toLocaleString('pt-BR')}</p>
+                          {request.mensagem && <p className="text-sm text-slate-700 mt-2">{request.mensagem}</p>}
+                        </div>
+                        <span className="h-fit px-2 py-1 rounded bg-amber-100 text-amber-800 text-xs font-bold">PENDENTE</span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <select value={solicitacaoCnpj[request.id] || ''} onChange={e=>setSolicitacaoCnpj(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                          <option value="">Vincular distribuidor...</option>
+                          {distribuidores.map(d=><option key={d.cnpj_raiz} value={d.cnpj_raiz}>{d.nome} ({d.cnpj_raiz})</option>)}
+                        </select>
+                        <select value={solicitacaoCargo[request.id] || 'Vendedor'} onChange={e=>setSolicitacaoCargo(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                          <option>Vendedor</option><option>Gerente</option><option>Diretor</option>
+                        </select>
+                        <input type="password" autoComplete="new-password" placeholder="Senha temporária opcional" value={solicitacaoSenha[request.id] || ''} onChange={e=>setSolicitacaoSenha(v=>({...v,[request.id]:e.target.value}))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                      </div>
+                      <p className="text-xs text-slate-500">Sem senha temporária: será enviado convite por e-mail para o usuário criar a senha. Se a conta já existir, informe uma senha temporária de pelo menos 12 caracteres.</p>
+                      <div className="flex gap-2">
+                        <button disabled={processingRequest===request.id} onClick={()=>handleApproveRequest(request)} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold disabled:opacity-50">{processingRequest===request.id?'Processando...':'Aprovar e enviar convite'}</button>
+                        <button disabled={processingRequest===request.id} onClick={()=>handleRejectRequest(request)} className="px-4 py-2 border border-rose-200 text-rose-700 rounded-lg text-sm font-bold disabled:opacity-50">Recusar</button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+            }
+          </section>
           <form onSubmit={handleAddUsuario} className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h2 className="text-lg font-bold text-slate-900">Liberar E-mail de Acesso</h2>
+            <p className="text-sm text-slate-500">Cadastro manual de permissão. O usuário ainda precisará receber convite/criar sua senha no Supabase Auth.</p>
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-              <input
-                type="email"
-                required
-                placeholder="email@distribuidor.com.br"
-                value={novoEmail}
-                onChange={(e) => setNovoEmail(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              />
-              <input
-                type="text"
-                placeholder="Nome do usuário"
-                value={novoNome}
-                onChange={(e) => setNovoNome(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              />
-              <select
-                value={novoCargo}
-                onChange={(e) => setNovoCargo(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="Vendedor">Vendedor</option>
-                <option value="Gerente">Gerente</option>
-                <option value="Diretor">Diretor</option>
-                <option value="Admin">Administrador</option>
-              </select>
-              <select
-                value={novoPerfil}
-                onChange={(e) => setNovoPerfil(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="distribuidor">Perfil Distribuidor</option>
-                <option value="admin">Perfil Admin Global</option>
-              </select>
-              {novoPerfil === 'distribuidor' && (
-                <select
-                  value={novoCnpjRaiz}
-                  onChange={(e) => setNovoCnpjRaiz(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                >
-                  {distribuidores.map((d) => (
-                    <option key={d.cnpj_raiz} value={d.cnpj_raiz}>
-                      {d.nome} ({d.cnpj_raiz})
-                    </option>
-                  ))}
-                </select>
-              )}
+              <input type="email" required placeholder="email@distribuidor.com.br" value={novoEmail} onChange={e=>setNovoEmail(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input type="text" placeholder="Nome do usuário" value={novoNome} onChange={e=>setNovoNome(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <select value={novoCargo} onChange={e=>setNovoCargo(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option>Vendedor</option><option>Gerente</option><option>Diretor</option><option>Admin</option></select>
+              <select value={novoPerfil} onChange={e=>setNovoPerfil(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="distribuidor">Perfil Distribuidor</option><option value="admin">Perfil Admin Global</option></select>
+              {novoPerfil==='distribuidor' && <select value={novoCnpjRaiz} onChange={e=>setNovoCnpjRaiz(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">{distribuidores.map(d=><option key={d.cnpj_raiz} value={d.cnpj_raiz}>{d.nome} ({d.cnpj_raiz})</option>)}</select>}
             </div>
-            <button
-              type="submit"
-              className="px-5 py-2 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700"
-            >
-              Cadastrar Permissão
-            </button>
+            <button type="submit" className="px-5 py-2 bg-emerald-600 text-white text-sm font-bold rounded-lg">Cadastrar Permissão</button>
           </form>
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-800 text-white text-xs uppercase">
-                <tr>
-                  <th className="px-4 py-3">E-mail</th>
-                  <th className="px-4 py-3">Nome / Cargo</th>
-                  <th className="px-4 py-3">Perfil</th>
-                  <th className="px-4 py-3">Distribuidor Vinculado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {usuariosAcesso.map((u) => {
-                  const dist = distribuidores.find((d) => d.cnpj_raiz === u.cnpj_raiz)
-                  return (
-                    <tr key={u.email}>
-                      <td className="px-4 py-3 font-medium text-slate-900">{u.email}</td>
-                      <td className="px-4 py-3 text-slate-600">{u.nome || '-'} ({u.cargo || '-'})</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                          {u.perfil.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {u.perfil === 'admin' ? 'TODOS OS CANAIS' : `${dist?.nome || u.cnpj_raiz}`}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <div className="p-4 font-bold text-slate-900">Contas com acesso liberado</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-800 text-white text-xs uppercase"><tr><th className="px-4 py-3">E-mail</th><th className="px-4 py-3">Nome / Cargo</th><th className="px-4 py-3">Perfil</th><th className="px-4 py-3">Distribuidor Vinculado</th></tr></thead>
+                <tbody className="divide-y divide-slate-200">
+                  {usuariosAcesso.map(u=>{const dist=distribuidores.find(d=>d.cnpj_raiz===u.cnpj_raiz);return <tr key={u.email}><td className="px-4 py-3 font-medium text-slate-900">{u.email}</td><td className="px-4 py-3 text-slate-600">{u.nome||'-'} ({u.cargo||'-'})</td><td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-bold ${u.perfil==='admin'?'bg-purple-100 text-purple-800':'bg-emerald-100 text-emerald-800'}`}>{u.perfil.toUpperCase()}</span></td><td className="px-4 py-3 text-slate-700">{u.perfil==='admin'?'TODOS OS CANAIS':(dist?.nome||u.cnpj_raiz)}</td></tr>})}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
+
     </div>
   )
 }
