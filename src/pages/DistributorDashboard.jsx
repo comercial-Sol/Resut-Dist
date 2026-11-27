@@ -29,8 +29,8 @@ export default function DistributorDashboard({
   onCrmUpdated,
 }) {
   const [activeTab, setActiveTab] = useState('geral')
-  const [anoSelecionado, setAnoSelecionado] = useState('2026')
-  const [mesVigente, setMesVigente] = useState('11')
+  const [anoSelecionado, setAnoSelecionado] = useState(String(new Date().getFullYear()))
+  const [mesVigente, setMesVigente] = useState(String(new Date().getMonth() + 1).padStart(2, '0'))
   const [searchRevenda, setSearchRevenda] = useState('')
   const [statusFiltro, setStatusFiltro] = useState('TODOS')
   const [editingCrm, setEditingCrm] = useState({})
@@ -41,6 +41,16 @@ export default function DistributorDashboard({
     crmRecords.forEach((r) => { m[r.revenda_cnpj] = r })
     return m
   }, [crmRecords])
+
+  const anosDisponiveis = useMemo(() => {
+    const years = new Set([String(new Date().getFullYear())])
+    projetosPagFat.forEach((p) => {
+      const reference = p.mes_referencia || p.data_emissao_nf || p.data_pagamento || p.data_criacao
+      const year = reference ? String(reference).slice(0, 4) : ''
+      if (/^\d{4}$/.test(year)) years.add(year)
+    })
+    return [...years].sort((a, b) => Number(b) - Number(a))
+  }, [projetosPagFat])
 
   // Faturamento mensal Realizado vs Meta
   const dadosMensais = useMemo(() => {
@@ -201,9 +211,7 @@ export default function DistributorDashboard({
               onChange={(e) => setAnoSelecionado(e.target.value)}
               className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold bg-white"
             >
-              <option value="2025">2025</option>
-              <option value="2026">2026</option>
-              <option value="2027">2027</option>
+              {anosDisponiveis.map((ano) => <option key={ano} value={ano}>{ano}</option>)}
             </select>
           </div>
           <div>
